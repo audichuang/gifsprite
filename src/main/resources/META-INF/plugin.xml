@@ -1,0 +1,57 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.physicsgeek75.bongo</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
+    <name>Code With Usagi Butt</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://www.github.com/physicsgeek75">physicsgeek75</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+    <description>
+    A cute rabbit butt animation that moves as you type!
+
+    You can drag the rabbit where-ever you want on your screen, and you can set a custom size!
+
+    Enjoy 27 frames of smooth animation as you code!
+
+    </description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+
+        <postStartupActivity implementation="com.physicsgeek75.bongo.Startup"/>
+
+        <!---<statusBarWidgetFactory implementation="com.physicsgeek75.bongo.BarFactory" id="BongoCatStatus"/>-->
+
+
+        <projectConfigurable
+                id="bongo.settings"
+                displayName="Usagi Butt"
+                parentId="appearance"
+                instance="com.physicsgeek75.bongo.BongoSettingsConfigurable"/>
+
+    </extensions>
+
+    <actions>
+        <action id="com.physicsgeek75.bongo.ToggleSticker"
+                class="com.physicsgeek75.bongo.ToggleBongoStickerAction"
+                text="Toggle Usagi Butt"
+                description="Show or hide the draggable Usagi Butt animation">
+            <add-to-group group-id="ViewMenu" anchor="last"/>
+        </action>
+    </actions>
+
+
+
+
+</idea-plugin>
