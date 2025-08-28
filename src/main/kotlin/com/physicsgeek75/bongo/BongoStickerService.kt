@@ -18,12 +18,10 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.*
 import java.awt.event.ComponentListener
-import javax.sound.sampled.AudioSystem
-import javax.sound.sampled.Clip
 import javax.swing.*
 import kotlin.math.max
 import kotlin.math.min
-import javax.sound.sampled.*
+import java.util.concurrent.ConcurrentHashMap
 
 
 private const val DEFAULT_SIZE_DIP = 128
@@ -36,6 +34,8 @@ class StickerState {
     var xDip: Int = -1
     var yDip: Int = -1
     var sizeDip: Int = DEFAULT_SIZE_DIP
+    var animationSpeed: Int = 30 // ms between frames (lower = faster)
+    var enableSmoothAnimation: Boolean = true
 }
 
 @State(name = "BongoStickerState", storages = [Storage("bongoSticker.xml")])
@@ -52,16 +52,24 @@ class BongoStickerService(private val project: Project)
     private var animationIcons: Array<Icon?> = arrayOfNulls(24)
     private var currentFrame = 0
     private var punchTimer: Timer? = null
+    
+    // Performance optimizations
+    private val iconCache = ConcurrentHashMap<String, Icon>()
+    private var lastFrameTime = 0L
+    private val MIN_FRAME_INTERVAL get() = state.animationSpeed.toLong()
 
     private val connection = ApplicationManager.getApplication().messageBus.connect(this)
 
-    private var idleIcon=loadScaledIcon("/icons/usagi-butt/1.svg",state.sizeDip)
+    private lateinit var idleIcon: Icon
 
-    private var clip: Clip? = null
-    var soundEnabled: Boolean = true
-    private var lastPlay = 0L //ns
 
     init {
+        // Pre-load all icons at startup for better performance
+        for (i in 1..24) {
+            animationIcons[i - 1] = loadScaledIcon("/icons/usagi-butt/$i.svg", state.sizeDip)
+        }
+        idleIcon = animationIcons[0]!!
+        
         connection.subscribe(BongoTopic.TOPIC, object : BongoTopic {
             override fun tapped() = onTap()
         })
@@ -113,13 +121,12 @@ class BongoStickerService(private val project: Project)
         lpResizeListener = resize
 
 
-        // Load all animation frames
-        for (i in 1..24) {
-            animationIcons[i - 1] = loadScaledIcon("/icons/usagi-butt/$i.svg", state.sizeDip)
-        }
-        idleIcon = animationIcons[0]!!
+        // Icons are already loaded in init block
 
-        label = JBLabel(animationIcons[0]).apply {
+        // Initialize idle timer
+        setupIdleTimer()
+        
+        label = JBLabel(idleIcon).apply {
             horizontalAlignment = JBLabel.CENTER
             verticalAlignment = JBLabel.CENTER
             toolTipText = "Usagi Butt"
@@ -154,12 +161,7 @@ class BongoStickerService(private val project: Project)
 
 
 
-        // Keep it inside bounds on window resize
-        lp.addComponentListener(object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent) {
-                clampIntoBounds()
-            }
-        })
+        // Removed duplicate listener - already added above at line 112
     }
 
     fun setVisible(visible: Boolean) {
@@ -182,26 +184,35 @@ class BongoStickerService(private val project: Project)
             return
         }
 
+        // Store references locally to avoid race conditions
         val lp = layeredPane
-
-        lpResizeListener?.let { listener -> lp?.removeComponentListener(listener) }
+        val p = panel
+        val listener = lpResizeListener
+        
+        // Clear references immediately
+        layeredPane = null
+        panel = null
+        label = null
         lpResizeListener = null
-
-        panel?.let { p ->
-            lp?.remove(p)
+        
+        // Stop timers
+        idleTimer?.stop()
+        idleTimer = null
+        punchTimer?.stop()
+        punchTimer = null
+        
+        // Remove UI components
+        listener?.let { lp?.removeComponentListener(it) }
+        p?.let { 
+            lp?.remove(it)
             lp?.revalidate()
             lp?.repaint()
         }
-
-        idleTimer?.stop()
-        punchTimer?.stop()
-
-        panel = null
-        label = null
+        
+        // Clear resources
         animationIcons = arrayOfNulls(24)
-        layeredPane = null
         currentFrame = 0
-        punchTimer = null
+        iconCache.clear()
     }
 
     fun applySize(newDip: Int) {
@@ -211,7 +222,8 @@ class BongoStickerService(private val project: Project)
             ensureAttached()
         }
 
-        // Rescale all animation frames
+        // Reload all icons with new size
+        iconCache.clear()
         for (i in 1..24) {
             animationIcons[i - 1] = loadScaledIcon("/icons/usagi-butt/$i.svg", state.sizeDip)
         }
@@ -261,42 +273,71 @@ class BongoStickerService(private val project: Project)
 
 
     override fun dispose() {
-        val app = ApplicationManager.getApplication()
-        if (!app.isDispatchThread) {
-            app.invokeAndWait({ detach() }, ModalityState.any())
-        } else {
-            detach()
+        try {
+            // Disconnect message bus first
+            connection.disconnect()
+            
+            // Stop all timers
+            idleTimer?.stop()
+            idleTimer = null
+            punchTimer?.stop()
+            punchTimer = null
+            
+            // Clean up UI components
+            val app = ApplicationManager.getApplication()
+            if (!app.isDispatchThread) {
+                app.invokeAndWait({ detach() }, ModalityState.any())
+            } else {
+                detach()
+            }
+            
+            // Clear cache to prevent memory leaks
+            iconCache.clear()
+        } catch (e: Exception) {
+            // Ensure dispose doesn't throw
         }
-
-        runCatching {
-            clip?.takeIf { it.isOpen }?.close()
-        }
-        clip = null
-
-        // clips.forEach { runCatching { it.close() } }
-        // clips = emptyArray()
     }
 
 
 
 
     // ---------- Behavior ----------
-    private var idleTimer = Timer(2000) {
-        currentFrame = 0
-        label?.icon = idleIcon
-    }.apply { isRepeats = false }
+    private var idleTimer: Timer? = null
+    
+    private fun setupIdleTimer() {
+        idleTimer?.stop()
+        idleTimer = Timer(2000) {
+            currentFrame = 0
+            val icon = idleIcon
+            if (label != null && icon != null) {
+                SwingUtilities.invokeLater {
+                    label?.icon = icon
+                }
+            }
+        }.apply { isRepeats = false }
+    }
 
     private fun onTap() {
         val p = panel ?: return
         val lbl = label ?: return
         
-        idleTimer.restart();
+        // Throttle animation to prevent performance issues
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastFrameTime < MIN_FRAME_INTERVAL) {
+            return
+        }
+        lastFrameTime = currentTime
+        
+        setupIdleTimer()
+        idleTimer?.restart()
         
         // Advance to next frame in animation sequence
         currentFrame = (currentFrame + 1) % 24
-        ApplicationManager.getApplication().invokeLater {
-            lbl.icon = animationIcons[currentFrame]
-            // Removed punch effect to prevent position drift
+        val nextIcon = animationIcons[currentFrame]
+        if (nextIcon != null) {
+            SwingUtilities.invokeLater {
+                lbl.icon = nextIcon
+            }
         }
     }
 
@@ -322,57 +363,23 @@ class BongoStickerService(private val project: Project)
     }
 
     // ---------- Helpers ----------
-    fun preloadClip() {
-        if(clip!=null && clip!!.isOpen) return
-
-        val url = javaClass.getResource("/sounds/click.wav")
-            ?: return
-
-        AudioSystem.getAudioInputStream(url).use { original ->
-            val base = original.format
-            val target =
-                if (base.encoding == AudioFormat.Encoding.PCM_SIGNED) base
-                else AudioFormat(
-                    AudioFormat.Encoding.PCM_SIGNED,
-                    base.sampleRate,
-                    16,
-                    base.channels,
-                    base.channels * 2,
-                    base.sampleRate,
-                    false
-                )
-
-            val toLoad = if (target == base) original
-            else AudioSystem.getAudioInputStream(target, original)
-
-            val c = AudioSystem.getClip()
-            c.open(toLoad)
-            clip = c
-        }
-
-
-    }
-
-    fun playClick() {
-        if (!soundEnabled) return
-        val now = System.nanoTime()
-        if (now - lastPlay < 20_000_000L) return  // 20 ms cooldown
-        lastPlay = now
-
-        val c = clip ?: run { preloadClip(); clip } ?: return
-        if (c.isRunning) c.stop()
-        c.framePosition = 0
-        c.start()
-    }
 
     private fun loadScaledIcon(path: String, dip: Int): Icon {
-        val raw = try { IconLoader.getIcon(path, javaClass) }
-        catch (_: Throwable) { com.intellij.icons.AllIcons.General.Information }
-        val targetPx = JBUI.scale(dip)
-        val baseH = max(1, raw.iconHeight)
-        val scale = targetPx.toFloat() / baseH
-        return IconUtil.scale(raw, null, scale)
+        // Use cache to avoid reloading same icons
+        val cacheKey = "$path:$dip"
+        return iconCache.getOrPut(cacheKey) {
+            val raw = try { 
+                IconLoader.getIcon(path, javaClass) 
+            } catch (_: Throwable) { 
+                com.intellij.icons.AllIcons.General.Information 
+            }
+            val targetPx = JBUI.scale(dip)
+            val baseH = max(1, raw.iconHeight)
+            val scale = targetPx.toFloat() / baseH
+            IconUtil.scale(raw, null, scale)
+        }
     }
+    
 
     private fun JBDimensionDip(wDip: Int, hDip: Int) =
         com.intellij.util.ui.JBDimension(JBUI.scale(wDip), JBUI.scale(hDip))
@@ -408,6 +415,8 @@ class BongoStickerService(private val project: Project)
                 val pt = SwingUtilities.convertPoint(e.component, e.point, lp)
                 val nx = (pt.x - dx).coerceIn(0, kotlin.math.max(0, lp.width - panel.width))
                 val ny = (pt.y - dy).coerceIn(0, kotlin.math.max(0, lp.height - panel.height))
+                
+                // Direct update for responsive dragging
                 panel.setLocation(nx, ny)
                 // persist as DIP
                 state.xDip = JBUI.unscale(nx)

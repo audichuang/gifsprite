@@ -198,5 +198,6 @@ gradle-app.setting
 ### Gradle Patch ###
 # Java heap dump
 *.hprof
+.kotlin
 
 # End of https://www.toptal.com/developers/gitignore/api/jetbrains+all,java,kotlin,gradle
