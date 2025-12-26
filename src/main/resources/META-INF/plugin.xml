@@ -9,27 +9,38 @@
     <vendor email="audiapplication880208@gmail.com" url="https://github.com/audichuang">audichuang</vendor>
 
     <description><![CDATA[
-    <p><b>GifSprite</b> - A cute animated sprite that moves as you type!</p>
-    <h2>Features:</h2>
+    <p><b>GifSprite</b> - A fun animated sprite for your IDE!</p>
+
+    <h2>What it does:</h2>
     <ul>
-        <li>Draggable sprite overlay on your IDE</li>
-        <li>Customizable size</li>
-        <li>Smooth animation triggered by typing</li>
-        <li>Import custom GIF animations</li>
+        <li><b>Drag & Drop</b> - Move the sprite anywhere you want</li>
+        <li><b>Resize</b> - Make it bigger or smaller (0-512)</li>
+        <li><b>Two Modes</b> - Auto Play (always moving) or Type Mode (moves when you type)</li>
+        <li><b>Speed Control</b> - Make it faster or slower</li>
+        <li><b>Custom GIFs</b> - Use your own GIF files</li>
+        <li><b>Any Language</b> - Name your GIFs in Chinese, Japanese, etc.</li>
     </ul>
+
+    <h2>How to use:</h2>
+    <ol>
+        <li>After install, you'll see it in the bottom-right corner</li>
+        <li>Drag it to move it around</li>
+        <li>Go to <b>Settings → Appearance → GifSprite</b> to change options</li>
+        <li>Use <b>View → Toggle GifSprite</b> to show/hide</li>
+    </ol>
     ]]>
     </description>
 
     <change-notes><![CDATA[
-    <h2>Version 1.0.0 - Initial Release</h2>
-    <p><b>GifSprite</b> - A cute animated sprite for your IDE!</p>
+    <h2>Version 1.0.0</h2>
     <ul>
-      <li>Draggable sprite overlay</li>
-      <li>Customizable size and animation speed</li>
-      <li>Import custom GIF animations</li>
-      <li>Toggle visibility from View menu</li>
+        <li><b>Two Animation Modes</b> - Auto Play or Type Triggered</li>
+        <li><b>Speed Control</b> - Make it faster or slower</li>
+        <li><b>GIF Import</b> - Use your own GIF files</li>
+        <li><b>Any Language Names</b> - Chinese, Japanese, and more</li>
+        <li><b>Drag & Drop</b> - Move it anywhere</li>
+        <li><b>Resize</b> - Make it bigger or smaller</li>
     </ul>
-    <p><b>Compatibility:</b> IntelliJ IDEA 2024.3+ and all JetBrains IDEs</p>
     ]]>
     </change-notes>
 
