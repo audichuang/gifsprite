@@ -1,4 +1,4 @@
-package com.github.audichuang.zipsprite
+package com.github.audichuang.gifsprite
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -18,7 +18,11 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.*
 import java.awt.event.ComponentListener
+import java.io.File
+import java.nio.file.Paths
+import javax.imageio.ImageIO
 import javax.swing.*
+import javax.swing.ImageIcon
 import kotlin.math.max
 import kotlin.math.min
 import java.util.concurrent.ConcurrentHashMap
@@ -36,11 +40,13 @@ class StickerState {
     var sizeDip: Int = DEFAULT_SIZE_DIP
     var animationSpeed: Int = 30 // ms between frames (lower = faster)
     var enableSmoothAnimation: Boolean = true
+    var selectedSpritePack: String = "default"  // "default" or custom pack name
+    var frameCount: Int = 24  // dynamic frame count
 }
 
-@State(name = "ZipSpriteStickerState", storages = [Storage("zipSpriteState.xml")])
+@State(name = "GifSpriteStickerState", storages = [Storage("gifSpriteState.xml")])
 @Service(Service.Level.PROJECT)
-class ZipSpriteStickerService(private val project: Project)
+class GifSpriteStickerService(private val project: Project)
     : PersistentStateComponent<StickerState>, Disposable {
 
     private var state = StickerState()
@@ -49,7 +55,7 @@ class ZipSpriteStickerService(private val project: Project)
     private var lpResizeListener: ComponentListener? = null
     private var panel: JPanel? = null
     private var label: JBLabel? = null
-    private var animationIcons: Array<Icon?> = arrayOfNulls(24)
+    private var animationIcons: MutableList<Icon> = mutableListOf()
     private var currentFrame = 0
     private var punchTimer: Timer? = null
 
@@ -64,15 +70,33 @@ class ZipSpriteStickerService(private val project: Project)
 
 
     init {
-        // Pre-load all icons at startup for better performance
-        for (i in 1..24) {
-            animationIcons[i - 1] = loadScaledIcon("/icons/default-sprite/$i.svg", state.sizeDip)
-        }
-        idleIcon = animationIcons[0]!!
+        // Load icons for selected sprite pack
+        reloadAnimationIcons()
 
-        connection.subscribe(ZipSpriteTopic.TOPIC, object : ZipSpriteTopic {
+        connection.subscribe(GifSpriteTopic.TOPIC, object : GifSpriteTopic {
             override fun tapped() = onTap()
         })
+    }
+
+    /**
+     * Reload animation icons from the current sprite pack.
+     */
+    private fun reloadAnimationIcons() {
+        iconCache.clear()
+        animationIcons.clear()
+
+        val packName = state.selectedSpritePack
+        state.frameCount = GifSpriteManager.getFrameCount(packName)
+
+        for (i in 1..state.frameCount) {
+            val path = GifSpriteManager.getFramePath(packName, i)
+            val icon = loadScaledIcon(path, state.sizeDip, GifSpriteManager.isCustomPack(packName))
+            animationIcons.add(icon)
+        }
+
+        idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else {
+            com.intellij.icons.AllIcons.General.Information
+        }
     }
 
     // ---------- PersistentStateComponent ----------
@@ -129,7 +153,7 @@ class ZipSpriteStickerService(private val project: Project)
         label = JBLabel(idleIcon).apply {
             horizontalAlignment = JBLabel.CENTER
             verticalAlignment = JBLabel.CENTER
-            toolTipText = "ZipSprite"
+            toolTipText = "GifSprite"
             preferredSize = JBDimensionDip(state.sizeDip, state.sizeDip)
             minimumSize   = preferredSize
             maximumSize   = preferredSize
@@ -210,7 +234,7 @@ class ZipSpriteStickerService(private val project: Project)
         }
 
         // Clear resources
-        animationIcons = arrayOfNulls(24)
+        animationIcons.clear()
         currentFrame = 0
         iconCache.clear()
     }
@@ -223,11 +247,7 @@ class ZipSpriteStickerService(private val project: Project)
         }
 
         // Reload all icons with new size
-        iconCache.clear()
-        for (i in 1..24) {
-            animationIcons[i - 1] = loadScaledIcon("/icons/default-sprite/$i.svg", state.sizeDip)
-        }
-        idleIcon = animationIcons[0]!!
+        reloadAnimationIcons()
 
         val sizePx = JBUI.scale(state.sizeDip)
 
@@ -236,7 +256,11 @@ class ZipSpriteStickerService(private val project: Project)
             minimumSize   = preferredSize
             maximumSize   = preferredSize
             setBounds(0, 0, sizePx.toInt(), sizePx)
-            icon = animationIcons[currentFrame % 24]
+            icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
+                animationIcons[currentFrame]
+            } else {
+                idleIcon
+            }
             revalidate()
             repaint()
 
@@ -270,6 +294,29 @@ class ZipSpriteStickerService(private val project: Project)
     fun resetSize() {
         applySize(DEFAULT_SIZE_DIP)
     }
+
+    /**
+     * Change the current sprite pack.
+     * Reloads all animation icons from the new pack.
+     */
+    fun changeSpritePack(packName: String) {
+        if (state.selectedSpritePack == packName) return
+
+        state.selectedSpritePack = packName
+        reloadAnimationIcons()
+
+        // Update the current label if attached
+        label?.apply {
+            icon = idleIcon
+            revalidate()
+            repaint()
+        }
+    }
+
+    /**
+     * Get the current sprite pack name.
+     */
+    fun getSelectedSpritePack(): String = state.selectedSpritePack
 
 
     override fun dispose() {
@@ -331,10 +378,10 @@ class ZipSpriteStickerService(private val project: Project)
         setupIdleTimer()
         idleTimer?.restart()
 
-        // Advance to next frame in animation sequence
-        currentFrame = (currentFrame + 1) % 24
-        val nextIcon = animationIcons[currentFrame]
-        if (nextIcon != null) {
+        // Advance to next frame in animation sequence (dynamic frame count)
+        if (animationIcons.isNotEmpty()) {
+            currentFrame = (currentFrame + 1) % animationIcons.size
+            val nextIcon = animationIcons[currentFrame]
             SwingUtilities.invokeLater {
                 lbl.icon = nextIcon
             }
@@ -364,14 +411,37 @@ class ZipSpriteStickerService(private val project: Project)
 
     // ---------- Helpers ----------
 
-    private fun loadScaledIcon(path: String, dip: Int): Icon {
+    /**
+     * Load and scale an icon from either bundled resources or filesystem.
+     *
+     * @param path Resource path (for default) or file path (for custom packs)
+     * @param dip Target size in DIP
+     * @param isCustomPack If true, load from filesystem; if false, load from bundled resources
+     */
+    private fun loadScaledIcon(path: String, dip: Int, isCustomPack: Boolean = false): Icon {
         // Use cache to avoid reloading same icons
-        val cacheKey = "$path:$dip"
+        val cacheKey = "$path:$dip:$isCustomPack"
         return iconCache.getOrPut(cacheKey) {
-            val raw = try {
-                IconLoader.getIcon(path, javaClass)
-            } catch (_: Throwable) {
-                com.intellij.icons.AllIcons.General.Information
+            val raw: Icon = if (isCustomPack) {
+                // Load from filesystem
+                try {
+                    val file = File(path)
+                    if (file.exists()) {
+                        val image = ImageIO.read(file)
+                        ImageIcon(image)
+                    } else {
+                        com.intellij.icons.AllIcons.General.Information
+                    }
+                } catch (_: Throwable) {
+                    com.intellij.icons.AllIcons.General.Information
+                }
+            } else {
+                // Load from bundled resources
+                try {
+                    IconLoader.getIcon(path, javaClass)
+                } catch (_: Throwable) {
+                    com.intellij.icons.AllIcons.General.Information
+                }
             }
             val targetPx = JBUI.scale(dip)
             val baseH = max(1, raw.iconHeight)

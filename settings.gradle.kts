@@ -1,1 +1,1 @@
-rootProject.name = "zipsprite"
+rootProject.name = "gifsprite"

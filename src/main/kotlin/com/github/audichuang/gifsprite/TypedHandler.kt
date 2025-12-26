@@ -1,4 +1,4 @@
-package com.github.audichuang.zipsprite
+package com.github.audichuang.gifsprite
 
 import com.intellij.ide.ApplicationInitializedListener
 import com.intellij.openapi.actionSystem.DataContext
@@ -17,7 +17,7 @@ class TypedHandler(
         // if (!c.isLetterOrDigit()) return
 
         ApplicationManager.getApplication()
-            .messageBus.syncPublisher(ZipSpriteTopic.TOPIC)
+            .messageBus.syncPublisher(GifSpriteTopic.TOPIC)
             .tapped()
     }
 }

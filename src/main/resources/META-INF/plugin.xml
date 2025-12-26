@@ -2,31 +2,31 @@
 <idea-plugin>
     <version>1.0.0</version>
 
-    <id>com.github.audichuang.zipsprite</id>
+    <id>com.github.audichuang.gifsprite</id>
     <depends>com.intellij.modules.platform</depends>
 
-    <name>ZipSprite</name>
+    <name>GifSprite</name>
     <vendor email="audiapplication880208@gmail.com" url="https://github.com/audichuang">audichuang</vendor>
 
     <description><![CDATA[
-    <p><b>ZipSprite</b> - A cute animated sprite that moves as you type!</p>
+    <p><b>GifSprite</b> - A cute animated sprite that moves as you type!</p>
     <h2>Features:</h2>
     <ul>
         <li>Draggable sprite overlay on your IDE</li>
         <li>Customizable size</li>
         <li>Smooth animation triggered by typing</li>
-        <li>Load custom sprite animations from ZIP files</li>
+        <li>Import custom GIF animations</li>
     </ul>
     ]]>
     </description>
 
     <change-notes><![CDATA[
     <h2>Version 1.0.0 - Initial Release</h2>
-    <p><b>ZipSprite</b> - A cute animated sprite for your IDE!</p>
+    <p><b>GifSprite</b> - A cute animated sprite for your IDE!</p>
     <ul>
       <li>Draggable sprite overlay</li>
       <li>Customizable size and animation speed</li>
-      <li>Smooth 24-frame animation</li>
+      <li>Import custom GIF animations</li>
       <li>Toggle visibility from View menu</li>
     </ul>
     <p><b>Compatibility:</b> IntelliJ IDEA 2024.3+ and all JetBrains IDEs</p>
@@ -34,20 +34,20 @@
     </change-notes>
 
     <extensions defaultExtensionNs="com.intellij">
-        <postStartupActivity implementation="com.github.audichuang.zipsprite.Startup"/>
+        <postStartupActivity implementation="com.github.audichuang.gifsprite.Startup"/>
 
         <projectConfigurable
-                id="zipsprite.settings"
-                displayName="ZipSprite"
+                id="gifsprite.settings"
+                displayName="GifSprite"
                 parentId="appearance"
-                instance="com.github.audichuang.zipsprite.ZipSpriteSettingsConfigurable"/>
+                instance="com.github.audichuang.gifsprite.GifSpriteSettingsConfigurable"/>
     </extensions>
 
     <actions>
-        <action id="com.github.audichuang.zipsprite.ToggleSticker"
-                class="com.github.audichuang.zipsprite.ToggleZipSpriteStickerAction"
-                text="Toggle ZipSprite"
-                description="Show or hide the draggable ZipSprite animation">
+        <action id="com.github.audichuang.gifsprite.ToggleSticker"
+                class="com.github.audichuang.gifsprite.ToggleGifSpriteStickerAction"
+                text="Toggle GifSprite"
+                description="Show or hide the draggable GifSprite animation">
             <add-to-group group-id="ViewMenu" anchor="last"/>
         </action>
     </actions>

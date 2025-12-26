@@ -1,4 +1,4 @@
-package com.github.audichuang.zipsprite
+package com.github.audichuang.gifsprite
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
@@ -9,7 +9,7 @@ import com.intellij.openapi.startup.ProjectActivity
 class Startup : ProjectActivity, DumbAware {
     override suspend fun execute(project: Project) {
         // handler installation once app level
-        ApplicationManager.getApplication().service<ZipSpriteTypingService>()
-        project.service<ZipSpriteStickerService>().ensureAttached()
+        ApplicationManager.getApplication().service<GifSpriteTypingService>()
+        project.service<GifSpriteStickerService>().ensureAttached()
     }
 }

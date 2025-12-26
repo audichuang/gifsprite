@@ -1,14 +1,14 @@
-package com.github.audichuang.zipsprite
+package com.github.audichuang.gifsprite
 
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.DumbAware
 
-class ToggleZipSpriteStickerAction : AnAction("Toggle ZipSprite"), DumbAware {
+class ToggleGifSpriteStickerAction : AnAction("Toggle GifSprite"), DumbAware {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val svc = project.service<ZipSpriteStickerService>()
+        val svc = project.service<GifSpriteStickerService>()
         svc.setVisible(!svc.state.visible)
         if (svc.state.visible) svc.ensureAttached()
     }

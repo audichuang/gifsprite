@@ -1,4 +1,4 @@
-package com.github.audichuang.zipsprite
+package com.github.audichuang.gifsprite
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -7,7 +7,7 @@ import com.intellij.openapi.editor.actionSystem.TypedAction
 import com.intellij.openapi.editor.actionSystem.TypedActionHandler
 
 @Service(Service.Level.APP)
-class ZipSpriteTypingService : Disposable {
+class GifSpriteTypingService : Disposable {
 
     private val typed: TypedAction = TypedAction.getInstance()
 
