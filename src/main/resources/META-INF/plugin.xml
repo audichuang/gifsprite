@@ -1,57 +1,54 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
-    <id>com.physicsgeek75.bongo</id>
+    <version>1.0.0</version>
 
-    <!-- Public plugin name should be written in Title Case.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Code With Usagi Butt</name>
-
-    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.github.com/physicsgeek75">physicsgeek75</vendor>
-
-    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
-    <description>
-    A cute rabbit butt animation that moves as you type!
-
-    You can drag the rabbit where-ever you want on your screen, and you can set a custom size!
-
-    Enjoy 27 frames of smooth animation as you code!
-
-    </description>
-
-    <!-- Product and plugin compatibility requirements.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <id>com.github.audichuang.zipsprite</id>
     <depends>com.intellij.modules.platform</depends>
 
-    <!-- Extension points defined by the plugin.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <name>ZipSprite</name>
+    <vendor email="audiapplication880208@gmail.com" url="https://github.com/audichuang">audichuang</vendor>
+
+    <description><![CDATA[
+    <p><b>ZipSprite</b> - A cute animated sprite that moves as you type!</p>
+    <h2>Features:</h2>
+    <ul>
+        <li>Draggable sprite overlay on your IDE</li>
+        <li>Customizable size</li>
+        <li>Smooth animation triggered by typing</li>
+        <li>Load custom sprite animations from ZIP files</li>
+    </ul>
+    ]]>
+    </description>
+
+    <change-notes><![CDATA[
+    <h2>Version 1.0.0 - Initial Release</h2>
+    <p><b>ZipSprite</b> - A cute animated sprite for your IDE!</p>
+    <ul>
+      <li>Draggable sprite overlay</li>
+      <li>Customizable size and animation speed</li>
+      <li>Smooth 24-frame animation</li>
+      <li>Toggle visibility from View menu</li>
+    </ul>
+    <p><b>Compatibility:</b> IntelliJ IDEA 2024.3+ and all JetBrains IDEs</p>
+    ]]>
+    </change-notes>
+
     <extensions defaultExtensionNs="com.intellij">
-
-        <postStartupActivity implementation="com.physicsgeek75.bongo.Startup"/>
-
-        <!---<statusBarWidgetFactory implementation="com.physicsgeek75.bongo.BarFactory" id="BongoCatStatus"/>-->
-
+        <postStartupActivity implementation="com.github.audichuang.zipsprite.Startup"/>
 
         <projectConfigurable
-                id="bongo.settings"
-                displayName="Usagi Butt"
+                id="zipsprite.settings"
+                displayName="ZipSprite"
                 parentId="appearance"
-                instance="com.physicsgeek75.bongo.BongoSettingsConfigurable"/>
-
+                instance="com.github.audichuang.zipsprite.ZipSpriteSettingsConfigurable"/>
     </extensions>
 
     <actions>
-        <action id="com.physicsgeek75.bongo.ToggleSticker"
-                class="com.physicsgeek75.bongo.ToggleBongoStickerAction"
-                text="Toggle Usagi Butt"
-                description="Show or hide the draggable Usagi Butt animation">
+        <action id="com.github.audichuang.zipsprite.ToggleSticker"
+                class="com.github.audichuang.zipsprite.ToggleZipSpriteStickerAction"
+                text="Toggle ZipSprite"
+                description="Show or hide the draggable ZipSprite animation">
             <add-to-group group-id="ViewMenu" anchor="last"/>
         </action>
     </actions>
-
-
-
-
 </idea-plugin>

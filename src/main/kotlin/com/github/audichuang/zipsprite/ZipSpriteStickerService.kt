@@ -1,4 +1,4 @@
-package com.physicsgeek75.bongo
+package com.github.audichuang.zipsprite
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -38,9 +38,9 @@ class StickerState {
     var enableSmoothAnimation: Boolean = true
 }
 
-@State(name = "BongoStickerState", storages = [Storage("bongoSticker.xml")])
+@State(name = "ZipSpriteStickerState", storages = [Storage("zipSpriteState.xml")])
 @Service(Service.Level.PROJECT)
-class BongoStickerService(private val project: Project)
+class ZipSpriteStickerService(private val project: Project)
     : PersistentStateComponent<StickerState>, Disposable {
 
     private var state = StickerState()
@@ -52,7 +52,7 @@ class BongoStickerService(private val project: Project)
     private var animationIcons: Array<Icon?> = arrayOfNulls(24)
     private var currentFrame = 0
     private var punchTimer: Timer? = null
-    
+
     // Performance optimizations
     private val iconCache = ConcurrentHashMap<String, Icon>()
     private var lastFrameTime = 0L
@@ -66,11 +66,11 @@ class BongoStickerService(private val project: Project)
     init {
         // Pre-load all icons at startup for better performance
         for (i in 1..24) {
-            animationIcons[i - 1] = loadScaledIcon("/icons/usagi-butt/$i.svg", state.sizeDip)
+            animationIcons[i - 1] = loadScaledIcon("/icons/default-sprite/$i.svg", state.sizeDip)
         }
         idleIcon = animationIcons[0]!!
-        
-        connection.subscribe(BongoTopic.TOPIC, object : BongoTopic {
+
+        connection.subscribe(ZipSpriteTopic.TOPIC, object : ZipSpriteTopic {
             override fun tapped() = onTap()
         })
     }
@@ -125,11 +125,11 @@ class BongoStickerService(private val project: Project)
 
         // Initialize idle timer
         setupIdleTimer()
-        
+
         label = JBLabel(idleIcon).apply {
             horizontalAlignment = JBLabel.CENTER
             verticalAlignment = JBLabel.CENTER
-            toolTipText = "Usagi Butt"
+            toolTipText = "ZipSprite"
             preferredSize = JBDimensionDip(state.sizeDip, state.sizeDip)
             minimumSize   = preferredSize
             maximumSize   = preferredSize
@@ -188,27 +188,27 @@ class BongoStickerService(private val project: Project)
         val lp = layeredPane
         val p = panel
         val listener = lpResizeListener
-        
+
         // Clear references immediately
         layeredPane = null
         panel = null
         label = null
         lpResizeListener = null
-        
+
         // Stop timers
         idleTimer?.stop()
         idleTimer = null
         punchTimer?.stop()
         punchTimer = null
-        
+
         // Remove UI components
         listener?.let { lp?.removeComponentListener(it) }
-        p?.let { 
+        p?.let {
             lp?.remove(it)
             lp?.revalidate()
             lp?.repaint()
         }
-        
+
         // Clear resources
         animationIcons = arrayOfNulls(24)
         currentFrame = 0
@@ -225,7 +225,7 @@ class BongoStickerService(private val project: Project)
         // Reload all icons with new size
         iconCache.clear()
         for (i in 1..24) {
-            animationIcons[i - 1] = loadScaledIcon("/icons/usagi-butt/$i.svg", state.sizeDip)
+            animationIcons[i - 1] = loadScaledIcon("/icons/default-sprite/$i.svg", state.sizeDip)
         }
         idleIcon = animationIcons[0]!!
 
@@ -276,13 +276,13 @@ class BongoStickerService(private val project: Project)
         try {
             // Disconnect message bus first
             connection.disconnect()
-            
+
             // Stop all timers
             idleTimer?.stop()
             idleTimer = null
             punchTimer?.stop()
             punchTimer = null
-            
+
             // Clean up UI components
             val app = ApplicationManager.getApplication()
             if (!app.isDispatchThread) {
@@ -290,7 +290,7 @@ class BongoStickerService(private val project: Project)
             } else {
                 detach()
             }
-            
+
             // Clear cache to prevent memory leaks
             iconCache.clear()
         } catch (e: Exception) {
@@ -303,7 +303,7 @@ class BongoStickerService(private val project: Project)
 
     // ---------- Behavior ----------
     private var idleTimer: Timer? = null
-    
+
     private fun setupIdleTimer() {
         idleTimer?.stop()
         idleTimer = Timer(2000) {
@@ -320,17 +320,17 @@ class BongoStickerService(private val project: Project)
     private fun onTap() {
         val p = panel ?: return
         val lbl = label ?: return
-        
+
         // Throttle animation to prevent performance issues
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastFrameTime < MIN_FRAME_INTERVAL) {
             return
         }
         lastFrameTime = currentTime
-        
+
         setupIdleTimer()
         idleTimer?.restart()
-        
+
         // Advance to next frame in animation sequence
         currentFrame = (currentFrame + 1) % 24
         val nextIcon = animationIcons[currentFrame]
@@ -344,21 +344,21 @@ class BongoStickerService(private val project: Project)
     private fun punch(p: JPanel) {
         // Cancel any existing punch animation
         punchTimer?.stop()
-        
+
         // Store the original position before moving
         val originalY = p.y
         val dy = JBUI.scale(2)
-        
+
         // Move down slightly
         p.setLocation(p.x, originalY + dy)
-        
+
         // Create new timer to move back to original position
         punchTimer = Timer(90) {
             p.setLocation(p.x, originalY)
             punchTimer = null
-        }.apply { 
+        }.apply {
             isRepeats = false
-            start() 
+            start()
         }
     }
 
@@ -368,10 +368,10 @@ class BongoStickerService(private val project: Project)
         // Use cache to avoid reloading same icons
         val cacheKey = "$path:$dip"
         return iconCache.getOrPut(cacheKey) {
-            val raw = try { 
-                IconLoader.getIcon(path, javaClass) 
-            } catch (_: Throwable) { 
-                com.intellij.icons.AllIcons.General.Information 
+            val raw = try {
+                IconLoader.getIcon(path, javaClass)
+            } catch (_: Throwable) {
+                com.intellij.icons.AllIcons.General.Information
             }
             val targetPx = JBUI.scale(dip)
             val baseH = max(1, raw.iconHeight)
@@ -379,7 +379,7 @@ class BongoStickerService(private val project: Project)
             IconUtil.scale(raw, null, scale)
         }
     }
-    
+
 
     private fun JBDimensionDip(wDip: Int, hDip: Int) =
         com.intellij.util.ui.JBDimension(JBUI.scale(wDip), JBUI.scale(hDip))
@@ -415,7 +415,7 @@ class BongoStickerService(private val project: Project)
                 val pt = SwingUtilities.convertPoint(e.component, e.point, lp)
                 val nx = (pt.x - dx).coerceIn(0, kotlin.math.max(0, lp.width - panel.width))
                 val ny = (pt.y - dy).coerceIn(0, kotlin.math.max(0, lp.height - panel.height))
-                
+
                 // Direct update for responsive dragging
                 panel.setLocation(nx, ny)
                 // persist as DIP

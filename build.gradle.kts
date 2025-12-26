@@ -4,8 +4,8 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.2.1"
 }
 
-group = "com.physicsgeek75"
-version = "1.2.4"
+group = "com.github.audichuang"
+version = "1.0.0"
 
 repositories {
     mavenCentral()
@@ -30,6 +30,7 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "243"
+            untilBuild = ""  // Empty string = no upper limit
         }
 
         changeNotes = """

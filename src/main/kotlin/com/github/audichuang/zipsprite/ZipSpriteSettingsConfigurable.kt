@@ -1,4 +1,4 @@
-package com.physicsgeek75.bongo
+package com.github.audichuang.zipsprite
 
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
@@ -9,14 +9,14 @@ import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JSlider
 
-class BongoSettingsConfigurable(private val project: Project) : Configurable {
+class ZipSpriteSettingsConfigurable(private val project: Project) : Configurable {
 
     private var root: JComponent? = null
     private lateinit var enableCheck: JCheckBox
     private lateinit var sizeSlider: JSlider
     private lateinit var sizeLabel: JLabel
-    private val svc = project.service<BongoStickerService>()
-    override fun getDisplayName(): String = "Bongo Cat"
+    private val svc = project.service<ZipSpriteStickerService>()
+    override fun getDisplayName(): String = "ZipSprite"
 
     override fun createComponent(): JComponent {
         if (root == null) {
@@ -40,8 +40,8 @@ class BongoSettingsConfigurable(private val project: Project) : Configurable {
 
                     row {
                         button("Reset") {
-                            project.service<BongoStickerService>().resetPosition()
-                            project.service<BongoStickerService>().resetSize()
+                            project.service<ZipSpriteStickerService>().resetPosition()
+                            project.service<ZipSpriteStickerService>().resetSize()
                             reset()
                         }
                     }
@@ -58,7 +58,7 @@ class BongoSettingsConfigurable(private val project: Project) : Configurable {
     }
 
     override fun apply() {
-        val svc = project.service<BongoStickerService>()
+        val svc = project.service<ZipSpriteStickerService>()
         svc.applySize(sizeSlider.value)
         svc.setVisible(enableCheck.isSelected)
         if (svc.isVisible()) svc.ensureAttached()
@@ -67,7 +67,7 @@ class BongoSettingsConfigurable(private val project: Project) : Configurable {
     }
 
     override fun reset() {
-        val svc = project.service<BongoStickerService>()
+        val svc = project.service<ZipSpriteStickerService>()
         enableCheck.isSelected = svc.isVisible()
         sizeSlider.value = svc.getSizeDip()
 

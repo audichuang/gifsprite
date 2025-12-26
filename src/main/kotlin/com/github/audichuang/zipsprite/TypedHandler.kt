@@ -1,4 +1,4 @@
-package com.physicsgeek75.bongo
+package com.github.audichuang.zipsprite
 
 import com.intellij.ide.ApplicationInitializedListener
 import com.intellij.openapi.actionSystem.DataContext
@@ -17,7 +17,7 @@ class TypedHandler(
         // if (!c.isLetterOrDigit()) return
 
         ApplicationManager.getApplication()
-            .messageBus.syncPublisher(BongoTopic.TOPIC)
+            .messageBus.syncPublisher(ZipSpriteTopic.TOPIC)
             .tapped()
     }
 }
