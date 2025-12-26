@@ -50,6 +50,7 @@ class StickerState {
     var selectedSpritePack: String = "default"  // "default" or custom pack name
     var frameCount: Int = 24  // dynamic frame count
     var animationMode: String = "TYPE_TRIGGERED"  // "TYPE_TRIGGERED" or "AUTO_PLAY"
+    var opacity: Int = 100 // 0-100 opacity percentage
 }
 
 @State(name = "GifSpriteStickerState", storages = [Storage("gifSpriteState.xml")])
@@ -63,7 +64,8 @@ class GifSpriteStickerService(private val project: Project)
     private var lpResizeListener: ComponentListener? = null
     private var panel: JPanel? = null
     private var label: JBLabel? = null
-    private var animationIcons: MutableList<Icon> = mutableListOf()
+    @Volatile
+    private var animationIcons: List<Icon> = emptyList()
     private var currentFrame = 0
     private var punchTimer: Timer? = null
     private var autoPlayTimer: Timer? = null  // Timer for auto-play mode
@@ -72,6 +74,8 @@ class GifSpriteStickerService(private val project: Project)
     private val iconCache = ConcurrentHashMap<String, Icon>()
     private var lastFrameTime = 0L
     private val MIN_FRAME_INTERVAL get() = state.animationSpeed.toLong()
+    private var attachRetryCount = 0  // 重試計數器，避免無窮重試
+    private val MAX_ATTACH_RETRIES = 10
 
     private val connection = ApplicationManager.getApplication().messageBus.connect(this)
 
@@ -92,16 +96,18 @@ class GifSpriteStickerService(private val project: Project)
      */
     private fun reloadAnimationIcons() {
         iconCache.clear()
-        animationIcons.clear()
 
         val packName = state.selectedSpritePack
         state.frameCount = GifSpriteManager.getFrameCount(packName)
 
+        // 建立新的 List 再原子替換，避免並發問題
+        val newIcons = mutableListOf<Icon>()
         for (i in 1..state.frameCount) {
             val path = GifSpriteManager.getFramePath(packName, i)
-            val icon = loadScaledIcon(path, state.sizeDip, GifSpriteManager.isCustomPack(packName))
-            animationIcons.add(icon)
+            val icon = loadScaledIcon(path, state.sizeDip, state.opacity, GifSpriteManager.isCustomPack(packName))
+            newIcons.add(icon)
         }
+        animationIcons = newIcons.toList()  // 原子替換
 
         idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else {
             com.intellij.icons.AllIcons.General.Information
@@ -117,25 +123,35 @@ class GifSpriteStickerService(private val project: Project)
         if (!state.visible || panel != null) return
 
         val app = ApplicationManager.getApplication()
-        if (!app.isDispatchThread) { // why was that there lol
-            // talking to myself is actually crazy
+        if (!app.isDispatchThread) {
             app.invokeLater({ ensureAttached() }, ModalityState.any())
             return
         }
 
+        // 檢查重試次數，避免無窮重試
+        if (attachRetryCount >= MAX_ATTACH_RETRIES) {
+            // 放棄重試，避免事件佇列擁塞
+            attachRetryCount = 0
+            return
+        }
 
         val frame = WindowManager.getInstance().getFrame(project) as? JFrame ?: return
         if (frame.rootPane == null) {
             // schedule one more try shortly
+            attachRetryCount++
             app.invokeLater({ ensureAttached() }, ModalityState.any())
             return
         }
 
 
         val lp = frame.rootPane.layeredPane ?: run {
+            attachRetryCount++
             app.invokeLater({ ensureAttached() }, ModalityState.any())
             return
         }
+
+        // 成功附加，重置重試計數器
+        attachRetryCount = 0
 
         if (layeredPane != null && layeredPane !== lp) {
             lpResizeListener?.let { old -> layeredPane!!.removeComponentListener(old) }
@@ -217,7 +233,8 @@ class GifSpriteStickerService(private val project: Project)
     private fun detach() {
         val app = ApplicationManager.getApplication()
         if (!app.isDispatchThread) {
-            app.invokeAndWait({ detach() }, ModalityState.any())
+            // 使用 invokeLater 避免死鎖風險
+            app.invokeLater({ detach() }, ModalityState.any())
             return
         }
 
@@ -248,8 +265,8 @@ class GifSpriteStickerService(private val project: Project)
             lp?.repaint()
         }
 
-        // Clear resources
-        animationIcons.clear()
+        // Clear resources (replace with empty list instead of clear)
+        animationIcons = emptyList()
         currentFrame = 0
         iconCache.clear()
     }
@@ -295,6 +312,23 @@ class GifSpriteStickerService(private val project: Project)
         clampIntoBounds()
     }
 
+    fun applyOpacity(newOpacity: Int) {
+        state.opacity = newOpacity.coerceIn(0, 100)
+        
+        // Reload all icons with new opacity
+        reloadAnimationIcons()
+        
+        // Update current frame immediately
+        label?.apply {
+            icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
+                animationIcons[currentFrame]
+            } else {
+                idleIcon
+            }
+            repaint()
+        }
+    }
+
     fun resetPosition() {
         state.xDip = -1; state.yDip = -1
         layeredPane?.let { lp ->
@@ -308,6 +342,7 @@ class GifSpriteStickerService(private val project: Project)
 
     fun resetSize() {
         applySize(DEFAULT_SIZE_DIP)
+        applyOpacity(100)
     }
 
     /**
@@ -377,12 +412,37 @@ class GifSpriteStickerService(private val project: Project)
     /**
      * Set the animation speed (ms per frame).
      */
+    /**
+     * Set the animation speed (ms per frame).
+     */
     fun setAnimationSpeed(speed: Int) {
         state.animationSpeed = speed.coerceIn(10, 500)
         // Restart auto-play timer if in auto-play mode
         if (getAnimationMode() == AnimationMode.AUTO_PLAY) {
             startAutoPlay()
         }
+    }
+
+    fun getOpacity(): Int = state.opacity
+    
+    fun setOpacity(opacity: Int) {
+        state.opacity = opacity.coerceIn(0, 100)
+    }
+
+    /**
+     * Get a preview icon for the settings page.
+     */
+    fun getPreviewIcon(packName: String, frameIndex: Int, sizeDip: Int, opacity: Int): Icon {
+        val path = GifSpriteManager.getFramePath(packName, frameIndex)
+        return loadScaledIcon(path, sizeDip, opacity, GifSpriteManager.isCustomPack(packName))
+    }
+
+    /**
+     * Clear preview cache to free memory when settings page is closed.
+     * 設定頁面關閉時呼叫，清理預覽緩存避免記憶體洩漏。
+     */
+    fun clearPreviewCache() {
+        iconCache.clear()
     }
 
     /**
@@ -394,9 +454,11 @@ class GifSpriteStickerService(private val project: Project)
         if (animationIcons.isEmpty()) return
 
         autoPlayTimer = Timer(state.animationSpeed) {
-            if (animationIcons.isNotEmpty()) {
-                currentFrame = (currentFrame + 1) % animationIcons.size
-                val nextIcon = animationIcons[currentFrame]
+            // 使用本地快照避免並發問題
+            val icons = animationIcons
+            if (icons.isNotEmpty()) {
+                currentFrame = (currentFrame + 1) % icons.size
+                val nextIcon = icons[currentFrame]
                 SwingUtilities.invokeLater {
                     label?.icon = nextIcon
                 }
@@ -432,7 +494,8 @@ class GifSpriteStickerService(private val project: Project)
             // Clean up UI components
             val app = ApplicationManager.getApplication()
             if (!app.isDispatchThread) {
-                app.invokeAndWait({ detach() }, ModalityState.any())
+                // 使用 invokeLater 避免死鎖風險
+                app.invokeLater({ detach() }, ModalityState.any())
             } else {
                 detach()
             }
@@ -481,9 +544,11 @@ class GifSpriteStickerService(private val project: Project)
         idleTimer?.restart()
 
         // Advance to next frame in animation sequence (dynamic frame count)
-        if (animationIcons.isNotEmpty()) {
-            currentFrame = (currentFrame + 1) % animationIcons.size
-            val nextIcon = animationIcons[currentFrame]
+        // 使用本地快照避免並發問題
+        val icons = animationIcons
+        if (icons.isNotEmpty()) {
+            currentFrame = (currentFrame + 1) % icons.size
+            val nextIcon = icons[currentFrame]
             SwingUtilities.invokeLater {
                 lbl.icon = nextIcon
             }
@@ -518,11 +583,12 @@ class GifSpriteStickerService(private val project: Project)
      *
      * @param path Resource path (for default) or file path (for custom packs)
      * @param dip Target size in DIP
+     * @param opacity Opacity percentage (0-100)
      * @param isCustomPack If true, load from filesystem; if false, load from bundled resources
      */
-    private fun loadScaledIcon(path: String, dip: Int, isCustomPack: Boolean = false): Icon {
+    private fun loadScaledIcon(path: String, dip: Int, opacity: Int, isCustomPack: Boolean = false): Icon {
         // Use cache to avoid reloading same icons
-        val cacheKey = "$path:$dip:$isCustomPack"
+        val cacheKey = "$path:$dip:$opacity:$isCustomPack"
         return iconCache.getOrPut(cacheKey) {
             val raw: Icon = if (isCustomPack) {
                 // Load from filesystem
@@ -545,11 +611,34 @@ class GifSpriteStickerService(private val project: Project)
                     com.intellij.icons.AllIcons.General.Information
                 }
             }
+            
+            // Apply size first
             val targetPx = JBUI.scale(dip)
             val baseH = max(1, raw.iconHeight)
             val scale = targetPx.toFloat() / baseH
-            IconUtil.scale(raw, null, scale)
+            val scaledIcon = IconUtil.scale(raw, null, scale)
+            
+            // Then apply opacity if needed
+            if (opacity < 100) {
+                 TransparentIcon(scaledIcon, opacity / 100f)
+            } else {
+                scaledIcon
+            }
         }
+    }
+
+    private class TransparentIcon(private val delegate: Icon, private val alpha: Float) : Icon {
+        override fun paintIcon(c: Component?, g: Graphics, x: Int, y: Int) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha)
+                delegate.paintIcon(c, g2, x, y)
+            } finally {
+                g2.dispose()
+            }
+        }
+        override fun getIconWidth(): Int = delegate.iconWidth
+        override fun getIconHeight(): Int = delegate.iconHeight
     }
 
 

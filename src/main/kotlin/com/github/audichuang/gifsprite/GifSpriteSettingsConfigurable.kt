@@ -1,9 +1,13 @@
 package com.github.audichuang.gifsprite
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.panel
@@ -14,6 +18,7 @@ import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JSlider
+import javax.swing.SwingConstants
 
 class GifSpriteSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -25,7 +30,13 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private lateinit var modeComboBox: JComboBox<String>
     private lateinit var speedSlider: JSlider
     private lateinit var speedLabel: JLabel
+    private lateinit var opacitySlider: JSlider
+    private lateinit var opacityLabel: JLabel
+    private lateinit var previewLabel: JLabel
     private val svc = project.service<GifSpriteStickerService>()
+    
+    private var previewTimer: javax.swing.Timer? = null
+    private var currentPreviewFrame = 1
 
     private val modeDisplayNames = mapOf(
         "TYPE_TRIGGERED" to "打字觸發 (Type Triggered)",
@@ -39,6 +50,18 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     override fun createComponent(): JComponent {
         if (root == null) {
             root = panel {
+                group("Preview") {
+                    row {
+                        // Create a placeholder label
+                        previewLabel = JLabel()
+                        previewLabel.horizontalAlignment = SwingConstants.CENTER
+                        previewLabel.verticalAlignment = SwingConstants.CENTER
+                        
+                        // We want a fixed height info panel or something, but dynamic size is fine
+                        cell(previewLabel)
+                    }
+                }
+
                 group("Main") {
                     row {
                         enableCheck = checkBox("Enable").component
@@ -52,7 +75,31 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                             paintTicks = false
                             paintLabels = false
                             snapToTicks = false
-                            addChangeListener { sizeLabel.text = "Size: $value DIP" }
+                            addChangeListener { 
+                                sizeLabel.text = "Size: $value DIP"
+                                // Debounce: 只在放開滑桿時更新預覽
+                                if (!valueIsAdjusting) {
+                                    updatePreview()
+                                }
+                            }
+                        }.component
+                    }
+
+                    row {
+                        opacityLabel = label("Opacity: ${svc.getOpacity()}%").component
+
+                        // min 0 max 100
+                        opacitySlider = slider(0, 100, 0, majorTickSpacing = 0).applyToComponent {
+                            paintTicks = false
+                            paintLabels = false
+                            snapToTicks = false
+                            addChangeListener { 
+                                opacityLabel.text = "Opacity: $value%"
+                                // Debounce: 只在放開滑桿時更新預覽
+                                if (!valueIsAdjusting) {
+                                    updatePreview()
+                                }
+                            }
                         }.component
                     }
 
@@ -70,6 +117,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         modeComboBox = comboBox(modeValues.map { modeDisplayNames[it] ?: it })
                             .applyToComponent {
                                 selectedIndex = modeValues.indexOf(svc.getAnimationMode().name).coerceAtLeast(0)
+                                addActionListener { updatePreview() }
                             }.component
                     }
 
@@ -82,7 +130,13 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                             paintLabels = false
                             snapToTicks = false
                             inverted = true  // Lower value = faster, so invert for UX
-                            addChangeListener { speedLabel.text = "Speed: $value ms/frame" }
+                            addChangeListener { 
+                                speedLabel.text = "Speed: $value ms/frame"
+                                // Debounce: 只在放開滑桿時更新預覽
+                                if (!valueIsAdjusting) {
+                                    updatePreview()
+                                }
+                            }
                         }.component
                     }
                     row {
@@ -95,6 +149,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         packComboBox = comboBox(GifSpriteManager.getAvailablePacks())
                             .applyToComponent {
                                 selectedItem = svc.getSelectedSpritePack()
+                                addActionListener { updatePreview() }
                             }.component
                     }
 
@@ -120,7 +175,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
         val virtualFile = FileChooser.chooseFile(descriptor, project, null)
         virtualFile?.let { vf ->
-            // Ask for pack name
+            // Ask for pack name (on EDT)
             val defaultName = vf.nameWithoutExtension
             val packName = Messages.showInputDialog(
                 project,
@@ -133,25 +188,44 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
             if (!packName.isNullOrBlank()) {
                 val gifFile = File(vf.path)
-                val frameCount = GifSpriteManager.importGif(gifFile, packName)
-
-                if (frameCount > 0) {
-                    Messages.showInfoMessage(
-                        project,
-                        "Successfully imported GIF with $frameCount frames.",
-                        "Import Complete"
-                    )
-                    // Refresh combo box
-                    refreshPackList()
-                    // Select the newly imported pack
-                    packComboBox.selectedItem = packName.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(50)
-                } else {
-                    Messages.showErrorDialog(
-                        project,
-                        "Failed to import GIF. Please check the file is a valid GIF animation.",
-                        "Import Error"
-                    )
-                }
+                val sanitizedName = packName.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(50)
+                
+                // Run import in background to avoid freezing UI
+                ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Importing GIF...", false) {
+                    private var frameCount = -1
+                    
+                    override fun run(indicator: ProgressIndicator) {
+                        indicator.isIndeterminate = true
+                        indicator.text = "Extracting frames from GIF..."
+                        frameCount = GifSpriteManager.importGif(gifFile, packName)
+                    }
+                    
+                    override fun onSuccess() {
+                        if (frameCount > 0) {
+                            Messages.showInfoMessage(
+                                project,
+                                "Successfully imported GIF with $frameCount frames.",
+                                "Import Complete"
+                            )
+                            refreshPackList()
+                            packComboBox.selectedItem = sanitizedName
+                        } else {
+                            Messages.showErrorDialog(
+                                project,
+                                "Failed to import GIF. Please check the file is a valid GIF animation.",
+                                "Import Error"
+                            )
+                        }
+                    }
+                    
+                    override fun onThrowable(error: Throwable) {
+                        Messages.showErrorDialog(
+                            project,
+                            "Error importing GIF: ${error.message}",
+                            "Import Error"
+                        )
+                    }
+                })
             }
         }
     }
@@ -216,7 +290,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                 sizeSlider.value != svc.getSizeDip() ||
                 selectedPack != svc.getSelectedSpritePack() ||
                 selectedMode != svc.getAnimationMode().name ||
-                speedSlider.value != svc.getAnimationSpeed()
+                speedSlider.value != svc.getAnimationSpeed() ||
+                opacitySlider.value != svc.getOpacity()
     }
 
     override fun apply() {
@@ -237,11 +312,15 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
         // Apply animation speed
         svc.setAnimationSpeed(speedSlider.value)
+        
+        // Apply opacity
+        svc.applyOpacity(opacitySlider.value)
 
         if (svc.isVisible()) svc.ensureAttached()
 
         sizeLabel.text = "Size: ${svc.getSizeDip()} DIP"
         speedLabel.text = "Speed: ${svc.getAnimationSpeed()} ms/frame"
+        opacityLabel.text = "Opacity: ${svc.getOpacity()}%"
     }
 
     override fun reset() {
@@ -261,14 +340,76 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
             speedSlider.value = svc.getAnimationSpeed()
             speedLabel.text = "Speed: ${svc.getAnimationSpeed()} ms/frame"
         }
+        
+        // Reset opacity
+        if (::opacitySlider.isInitialized) {
+            opacitySlider.value = svc.getOpacity()
+            opacityLabel.text = "Opacity: ${svc.getOpacity()}%"
+        }
 
         // Refresh pack list and select current
         if (::packComboBox.isInitialized) {
             refreshPackList()
         }
+        
+        // Initial preview update
+        if (::previewLabel.isInitialized) {
+            updatePreview()
+        }
+    }
+    
+    private fun updatePreview() {
+        if (!::previewLabel.isInitialized) return
+        
+        val packName = packComboBox.selectedItem as? String ?: "default"
+        val size = sizeSlider.value
+        val opacity = opacitySlider.value
+        
+        // Check mode for animation
+        val modeIndex = modeComboBox.selectedIndex
+        val isAutoPlay = modeIndex >= 0 && modeValues[modeIndex] == "AUTO_PLAY"
+        
+        if (isAutoPlay) {
+            val speed = speedSlider.value
+            
+            if (previewTimer == null) {
+                previewTimer = javax.swing.Timer(speed) {
+                     // 檢查設定頁面是否還開著，避免競爭條件
+                     if (root == null || !::packComboBox.isInitialized) return@Timer
+                     val currentPack = packComboBox.selectedItem as? String ?: "default"
+                     val currentSize = sizeSlider.value
+                     val currentOpacity = opacitySlider.value
+                     
+                     val frameCount = GifSpriteManager.getFrameCount(currentPack)
+                     if (frameCount > 0) {
+                         // 1-based index
+                         currentPreviewFrame = (currentPreviewFrame % frameCount) + 1
+                     } else {
+                        currentPreviewFrame = 1
+                     }
+                     val icon = svc.getPreviewIcon(currentPack, currentPreviewFrame, currentSize, currentOpacity)
+                     previewLabel.icon = icon
+                     previewLabel.repaint()
+                }.apply { start() }
+            } else {
+                 previewTimer?.delay = speed
+                 if (!previewTimer!!.isRunning) previewTimer?.start()
+            }
+        } else {
+            previewTimer?.stop()
+            currentPreviewFrame = 1
+            val icon = svc.getPreviewIcon(packName, 1, size, opacity)
+            previewLabel.icon = icon
+            previewLabel.repaint()
+        }
+        previewLabel.text = null
     }
 
     override fun disposeUIResources() {
+        previewTimer?.stop()
+        previewTimer = null
+        // 清理預覽緩存避免記憶體洩漏
+        svc.clearPreviewCache()
         root = null
     }
 }
