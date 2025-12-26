@@ -157,6 +157,9 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         button("Import GIF...") {
                             importGif()
                         }
+                        button("Import from URL...") {
+                            importGifFromUrl()
+                        }
                         button("Delete Pack") {
                             deleteSelectedPack()
                         }
@@ -166,6 +169,72 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
             reset()
         }
         return root!!
+    }
+
+    private fun importGifFromUrl() {
+        val url = Messages.showInputDialog(
+            project,
+            "Enter the URL of the GIF file:",
+            "Import GIF from URL",
+            null
+        )
+
+        if (!url.isNullOrBlank()) {
+            // Ask for pack name (on EDT)
+            val defaultName = try {
+                 File(java.net.URI.create(url).toURL().path).nameWithoutExtension
+            } catch (e: Exception) { "downloaded_gif" }
+            
+            val packName = Messages.showInputDialog(
+                project,
+                "Enter a name for this sprite pack:",
+                "Import GIF",
+                null,
+                defaultName,
+                null
+            )
+
+            if (!packName.isNullOrBlank()) {
+                 val sanitizedName = packName.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(50)
+                 
+                 // Run import in background
+                 ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Importing GIF from URL...", false) {
+                     private var frameCount = -1
+                     
+                     override fun run(indicator: ProgressIndicator) {
+                         indicator.isIndeterminate = true
+                         indicator.text = "Downloading and extracting GIF..."
+                         frameCount = GifSpriteManager.importGifFromUrl(url, packName)
+                     }
+                     
+                     override fun onSuccess() {
+                         if (frameCount > 0) {
+                             Messages.showInfoMessage(
+                                 project,
+                                 "Successfully imported GIF from URL with $frameCount frames.",
+                                 "Import Complete"
+                             )
+                             refreshPackList()
+                             packComboBox.selectedItem = sanitizedName
+                         } else {
+                             Messages.showErrorDialog(
+                                 project,
+                                 "Failed to import GIF. Please check the URL is valid.",
+                                 "Import Error"
+                             )
+                         }
+                     }
+                     
+                     override fun onThrowable(error: Throwable) {
+                         Messages.showErrorDialog(
+                             project,
+                             "Error importing GIF: ${error.message}",
+                             "Import Error"
+                         )
+                     }
+                 })
+            }
+        }
     }
 
     private fun importGif() {

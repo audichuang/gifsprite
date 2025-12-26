@@ -10,6 +10,8 @@ class Startup : ProjectActivity, DumbAware {
     override suspend fun execute(project: Project) {
         // handler installation once app level
         ApplicationManager.getApplication().service<GifSpriteTypingService>()
+        // Ensure default pack exists
+        GifSpriteManager.ensureDefaultPackExists()
         project.service<GifSpriteStickerService>().ensureAttached()
     }
 }

@@ -5,9 +5,11 @@ import java.awt.AlphaComposite
 import java.awt.Color
 import java.awt.image.BufferedImage
 import java.io.File
+import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 import javax.imageio.ImageIO
 import javax.imageio.ImageReader
 import javax.imageio.metadata.IIOMetadataNode
@@ -20,6 +22,7 @@ import org.w3c.dom.NodeList
 object GifSpriteManager {
 
     private const val PACKS_DIR_NAME = "gifsprite-packs"
+    private const val DEFAULT_PACK_NAME = "default"
 
     /**
      * Get the directory where sprite packs are stored.
@@ -41,22 +44,75 @@ object GifSpriteManager {
     }
 
     /**
+     * Ensure the default pack (cute_dog) exists in the filesystem.
+     * If not, it extracts it from the bundled resource.
+     */
+    fun ensureDefaultPackExists() {
+        val packsDir = ensurePacksDirectoryExists()
+        val defaultPackDir = packsDir.resolve(DEFAULT_PACK_NAME)
+
+        // If default pack doesn't exist or is empty, re-extract it
+        if (!Files.exists(defaultPackDir) || (Files.list(defaultPackDir).count() == 0L)) {
+            try {
+                // Load bundled GIF resource
+                val resourceStream = javaClass.getResourceAsStream("/icons/cute_dog.gif")
+                if (resourceStream != null) {
+                    val tempFile = Files.createTempFile("default_gif", ".gif")
+                    Files.copy(resourceStream, tempFile, StandardCopyOption.REPLACE_EXISTING)
+                    
+                    importGif(tempFile.toFile(), DEFAULT_PACK_NAME)
+                    
+                    Files.deleteIfExists(tempFile)
+                } 
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /**
      * Get list of available sprite pack names.
      * Returns "default" plus any custom packs.
      */
     fun getAvailablePacks(): List<String> {
-        val packs = mutableListOf("default")
+        val packs = mutableListOf<String>()
         val packsDir = getPacksDirectory()
+
+        // Ensure default is always in the list if it exists (or we'll create it)
+        ensureDefaultPackExists()
+        packs.add(DEFAULT_PACK_NAME)
 
         if (Files.exists(packsDir)) {
             Files.list(packsDir).use { stream ->
                 stream.filter { Files.isDirectory(it) }
                     .map { it.fileName.toString() }
+                    .filter { it != DEFAULT_PACK_NAME } // avoid duplicate "default"
                     .forEach { packs.add(it) }
             }
         }
 
         return packs
+    }
+
+    /**
+     * Import a GIF file from a URL.
+     */
+    fun importGifFromUrl(urlString: String, packName: String): Int {
+        try {
+            val url = java.net.URI.create(urlString).toURL()
+            val tempFile = Files.createTempFile("import_url", ".gif")
+            
+            url.openStream().use { input ->
+                Files.copy(input, tempFile, StandardCopyOption.REPLACE_EXISTING)
+            }
+            
+            val count = importGif(tempFile.toFile(), packName)
+            Files.deleteIfExists(tempFile)
+            return count
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return -1
+        }
     }
 
     /**
@@ -211,16 +267,19 @@ object GifSpriteManager {
 
     /**
      * Get the frame count for a sprite pack.
-     * For "default", returns 24. For custom packs, counts PNG files.
      */
     fun getFrameCount(packName: String): Int {
-        if (packName == "default") {
-            return 24
-        }
-
         val packDir = getPacksDirectory().resolve(packName)
         if (!Files.exists(packDir)) {
-            return 0
+             // Try to ensure default pack if that's what we are looking for
+             if (packName == DEFAULT_PACK_NAME) {
+                 ensureDefaultPackExists()
+                 if (Files.exists(packDir)) {
+                     // Recurse once
+                     return getFrameCount(packName)
+                 }
+             }
+             return 0
         }
 
         var count = 0
@@ -233,23 +292,20 @@ object GifSpriteManager {
     /**
      * Get the path to a specific frame in a sprite pack.
      *
-     * @param packName The sprite pack name ("default" for bundled icons)
+     * @param packName The sprite pack name
      * @param frameNumber The frame number (1-based)
-     * @return The path string (resource path for default, file path for custom)
+     * @return The absolute file path string
      */
     fun getFramePath(packName: String, frameNumber: Int): String {
-        return if (packName == "default") {
-            "/icons/default-sprite/$frameNumber.svg"
-        } else {
-            getPacksDirectory().resolve(packName).resolve("$frameNumber.png").toString()
-        }
+       return getPacksDirectory().resolve(packName).resolve("$frameNumber.png").toString()
     }
 
     /**
      * Check if a sprite pack uses file system (custom) or resources (default).
+     * Now everything is file system based.
      */
     fun isCustomPack(packName: String): Boolean {
-        return packName != "default"
+        return true
     }
 
     /**
@@ -257,7 +313,7 @@ object GifSpriteManager {
      * Cannot delete "default" pack.
      */
     fun deletePack(packName: String): Boolean {
-        if (packName == "default") {
+        if (packName == DEFAULT_PACK_NAME) {
             return false
         }
 
