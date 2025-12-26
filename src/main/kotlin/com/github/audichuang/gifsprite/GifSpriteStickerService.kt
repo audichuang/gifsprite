@@ -32,16 +32,24 @@ private const val DEFAULT_SIZE_DIP = 128
 private const val DEFAULT_MARGIN_DIP = 0
 private const val ICON_DIP = DEFAULT_SIZE_DIP
 
+/**
+ * Animation mode for the sprite
+ */
+enum class AnimationMode {
+    TYPE_TRIGGERED,  // Animate when typing (current behavior)
+    AUTO_PLAY        // Loop animation automatically
+}
 
 class StickerState {
     var visible: Boolean = true
     var xDip: Int = -1
     var yDip: Int = -1
     var sizeDip: Int = DEFAULT_SIZE_DIP
-    var animationSpeed: Int = 30 // ms between frames (lower = faster)
+    var animationSpeed: Int = 50 // ms between frames for auto-play (lower = faster)
     var enableSmoothAnimation: Boolean = true
     var selectedSpritePack: String = "default"  // "default" or custom pack name
     var frameCount: Int = 24  // dynamic frame count
+    var animationMode: String = "TYPE_TRIGGERED"  // "TYPE_TRIGGERED" or "AUTO_PLAY"
 }
 
 @State(name = "GifSpriteStickerState", storages = [Storage("gifSpriteState.xml")])
@@ -58,6 +66,7 @@ class GifSpriteStickerService(private val project: Project)
     private var animationIcons: MutableList<Icon> = mutableListOf()
     private var currentFrame = 0
     private var punchTimer: Timer? = null
+    private var autoPlayTimer: Timer? = null  // Timer for auto-play mode
 
     // Performance optimizations
     private val iconCache = ConcurrentHashMap<String, Icon>()
@@ -147,8 +156,12 @@ class GifSpriteStickerService(private val project: Project)
 
         // Icons are already loaded in init block
 
-        // Initialize idle timer
-        setupIdleTimer()
+        // Initialize timer based on animation mode
+        if (getAnimationMode() == AnimationMode.AUTO_PLAY) {
+            startAutoPlay()
+        } else {
+            setupIdleTimer()
+        }
 
         label = JBLabel(idleIcon).apply {
             horizontalAlignment = JBLabel.CENTER
@@ -224,6 +237,8 @@ class GifSpriteStickerService(private val project: Project)
         idleTimer = null
         punchTimer?.stop()
         punchTimer = null
+        autoPlayTimer?.stop()
+        autoPlayTimer = null
 
         // Remove UI components
         listener?.let { lp?.removeComponentListener(it) }
@@ -318,6 +333,88 @@ class GifSpriteStickerService(private val project: Project)
      */
     fun getSelectedSpritePack(): String = state.selectedSpritePack
 
+    /**
+     * Get the current animation mode.
+     */
+    fun getAnimationMode(): AnimationMode {
+        return try {
+            AnimationMode.valueOf(state.animationMode)
+        } catch (e: Exception) {
+            AnimationMode.TYPE_TRIGGERED
+        }
+    }
+
+    /**
+     * Set the animation mode.
+     */
+    fun setAnimationMode(mode: AnimationMode) {
+        if (state.animationMode == mode.name) return
+
+        state.animationMode = mode.name
+
+        when (mode) {
+            AnimationMode.AUTO_PLAY -> {
+                // Stop idle timer and start auto-play
+                idleTimer?.stop()
+                startAutoPlay()
+            }
+            AnimationMode.TYPE_TRIGGERED -> {
+                // Stop auto-play and setup idle timer
+                stopAutoPlay()
+                setupIdleTimer()
+                // Reset to first frame
+                currentFrame = 0
+                label?.icon = idleIcon
+            }
+        }
+    }
+
+    /**
+     * Get the animation speed (ms per frame).
+     */
+    fun getAnimationSpeed(): Int = state.animationSpeed
+
+    /**
+     * Set the animation speed (ms per frame).
+     */
+    fun setAnimationSpeed(speed: Int) {
+        state.animationSpeed = speed.coerceIn(10, 500)
+        // Restart auto-play timer if in auto-play mode
+        if (getAnimationMode() == AnimationMode.AUTO_PLAY) {
+            startAutoPlay()
+        }
+    }
+
+    /**
+     * Start auto-play animation loop.
+     */
+    private fun startAutoPlay() {
+        stopAutoPlay()
+
+        if (animationIcons.isEmpty()) return
+
+        autoPlayTimer = Timer(state.animationSpeed) {
+            if (animationIcons.isNotEmpty()) {
+                currentFrame = (currentFrame + 1) % animationIcons.size
+                val nextIcon = animationIcons[currentFrame]
+                SwingUtilities.invokeLater {
+                    label?.icon = nextIcon
+                }
+            }
+        }.apply {
+            isRepeats = true
+            start()
+        }
+    }
+
+    /**
+     * Stop auto-play animation.
+     */
+    private fun stopAutoPlay() {
+        autoPlayTimer?.stop()
+        autoPlayTimer = null
+    }
+
 
     override fun dispose() {
         try {
@@ -329,6 +426,8 @@ class GifSpriteStickerService(private val project: Project)
             idleTimer = null
             punchTimer?.stop()
             punchTimer = null
+            autoPlayTimer?.stop()
+            autoPlayTimer = null
 
             // Clean up UI components
             val app = ApplicationManager.getApplication()
@@ -365,6 +464,9 @@ class GifSpriteStickerService(private val project: Project)
     }
 
     private fun onTap() {
+        // Only respond to typing in TYPE_TRIGGERED mode
+        if (getAnimationMode() != AnimationMode.TYPE_TRIGGERED) return
+
         val p = panel ?: return
         val lbl = label ?: return
 

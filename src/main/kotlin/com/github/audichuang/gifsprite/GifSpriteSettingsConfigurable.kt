@@ -22,7 +22,17 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private lateinit var sizeSlider: JSlider
     private lateinit var sizeLabel: JLabel
     private lateinit var packComboBox: JComboBox<String>
+    private lateinit var modeComboBox: JComboBox<String>
+    private lateinit var speedSlider: JSlider
+    private lateinit var speedLabel: JLabel
     private val svc = project.service<GifSpriteStickerService>()
+
+    private val modeDisplayNames = mapOf(
+        "TYPE_TRIGGERED" to "打字觸發 (Type Triggered)",
+        "AUTO_PLAY" to "自動播放 (Auto Play)"
+    )
+
+    private val modeValues = listOf("TYPE_TRIGGERED", "AUTO_PLAY")
 
     override fun getDisplayName(): String = "GifSprite"
 
@@ -52,6 +62,31 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                             project.service<GifSpriteStickerService>().resetSize()
                             reset()
                         }
+                    }
+                }
+
+                group("Animation") {
+                    row("Mode:") {
+                        modeComboBox = comboBox(modeValues.map { modeDisplayNames[it] ?: it })
+                            .applyToComponent {
+                                selectedIndex = modeValues.indexOf(svc.getAnimationMode().name).coerceAtLeast(0)
+                            }.component
+                    }
+
+                    row {
+                        speedLabel = label("Speed: ${svc.getAnimationSpeed()} ms/frame").component
+
+                        // min 10ms max 500ms (lower = faster)
+                        speedSlider = slider(10, 500, 0, majorTickSpacing = 0).applyToComponent {
+                            paintTicks = false
+                            paintLabels = false
+                            snapToTicks = false
+                            inverted = true  // Lower value = faster, so invert for UX
+                            addChangeListener { speedLabel.text = "Speed: $value ms/frame" }
+                        }.component
+                    }
+                    row {
+                        comment("Lower value = faster animation")
                     }
                 }
 
@@ -109,7 +144,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     // Refresh combo box
                     refreshPackList()
                     // Select the newly imported pack
-                    packComboBox.selectedItem = packName.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
+                    packComboBox.selectedItem = packName.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(50)
                 } else {
                     Messages.showErrorDialog(
                         project,
@@ -170,9 +205,18 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
     override fun isModified(): Boolean {
         val selectedPack = packComboBox.selectedItem as? String ?: "default"
+        val selectedModeIndex = modeComboBox.selectedIndex
+        val selectedMode = if (selectedModeIndex >= 0 && selectedModeIndex < modeValues.size) {
+            modeValues[selectedModeIndex]
+        } else {
+            "TYPE_TRIGGERED"
+        }
+
         return enableCheck.isSelected != svc.isVisible() ||
                 sizeSlider.value != svc.getSizeDip() ||
-                selectedPack != svc.getSelectedSpritePack()
+                selectedPack != svc.getSelectedSpritePack() ||
+                selectedMode != svc.getAnimationMode().name ||
+                speedSlider.value != svc.getAnimationSpeed()
     }
 
     override fun apply() {
@@ -184,9 +228,20 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         val selectedPack = packComboBox.selectedItem as? String ?: "default"
         svc.changeSpritePack(selectedPack)
 
+        // Apply animation mode
+        val selectedModeIndex = modeComboBox.selectedIndex
+        if (selectedModeIndex >= 0 && selectedModeIndex < modeValues.size) {
+            val mode = AnimationMode.valueOf(modeValues[selectedModeIndex])
+            svc.setAnimationMode(mode)
+        }
+
+        // Apply animation speed
+        svc.setAnimationSpeed(speedSlider.value)
+
         if (svc.isVisible()) svc.ensureAttached()
 
         sizeLabel.text = "Size: ${svc.getSizeDip()} DIP"
+        speedLabel.text = "Speed: ${svc.getAnimationSpeed()} ms/frame"
     }
 
     override fun reset() {
@@ -194,6 +249,18 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         enableCheck.isSelected = svc.isVisible()
         sizeSlider.value = svc.getSizeDip()
         sizeLabel.text = "Size: ${svc.getSizeDip()} DIP"
+
+        // Reset animation mode
+        if (::modeComboBox.isInitialized) {
+            val modeIndex = modeValues.indexOf(svc.getAnimationMode().name)
+            modeComboBox.selectedIndex = modeIndex.coerceAtLeast(0)
+        }
+
+        // Reset speed
+        if (::speedSlider.isInitialized) {
+            speedSlider.value = svc.getAnimationSpeed()
+            speedLabel.text = "Speed: ${svc.getAnimationSpeed()} ms/frame"
+        }
 
         // Refresh pack list and select current
         if (::packComboBox.isInitialized) {
