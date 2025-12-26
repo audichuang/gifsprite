@@ -52,7 +52,9 @@ object GifSpriteManager {
         val defaultPackDir = packsDir.resolve(DEFAULT_PACK_NAME)
 
         // If default pack doesn't exist or is empty, re-extract it
-        if (!Files.exists(defaultPackDir) || (Files.list(defaultPackDir).count() == 0L)) {
+        val isEmpty = !Files.exists(defaultPackDir) || Files.list(defaultPackDir).use { it.count() == 0L }
+        
+        if (isEmpty) {
             try {
                 // Load bundled GIF resource
                 val resourceStream = javaClass.getResourceAsStream("/icons/cute_dog.gif")
