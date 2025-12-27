@@ -189,7 +189,7 @@ object GifSpriteManager {
 
     /**
      * Extract frames from a GIF file and save as numbered PNGs.
-     * Properly handles GIF disposal methods and frame positioning.
+     * Properly handles GIF disposal methods, frame positioning, and memory management.
      */
     private fun extractGifFrames(gifFile: File, destDir: Path): Int {
         val readers = ImageIO.getImageReadersByFormatName("gif")
@@ -211,47 +211,62 @@ object GifSpriteManager {
             val firstFrame = reader.read(0)
             val canvasWidth = firstFrame.width
             val canvasHeight = firstFrame.height
+            firstFrame.flush()  // 釋放 firstFrame 的原生資源
 
             // Create the main canvas and a backup for "restoreToPrevious"
             var canvas = BufferedImage(canvasWidth, canvasHeight, BufferedImage.TYPE_INT_ARGB)
             var previousCanvas: BufferedImage? = null
 
-            for (i in 0 until frameCount) {
-                val frame = reader.read(i)
-                val metadata = getFrameMetadata(reader, i)
+            try {
+                for (i in 0 until frameCount) {
+                    val frame = reader.read(i)
+                    val metadata = getFrameMetadata(reader, i)
 
-                // Save canvas state before drawing (for restoreToPrevious)
-                if (metadata.disposalMethod == "restoreToPrevious") {
-                    previousCanvas = copyImage(canvas)
-                }
+                    try {
+                        // Save canvas state before drawing (for restoreToPrevious)
+                        if (metadata.disposalMethod == "restoreToPrevious") {
+                            previousCanvas?.flush()  // 釋放舊的 previousCanvas
+                            previousCanvas = copyImage(canvas)
+                        }
 
-                // Draw the current frame onto the canvas at the correct position
-                val g = canvas.createGraphics()
-                g.drawImage(frame, metadata.left, metadata.top, null)
-                g.dispose()
+                        // Draw the current frame onto the canvas at the correct position
+                        val g = canvas.createGraphics()
+                        g.drawImage(frame, metadata.left, metadata.top, null)
+                        g.dispose()
 
-                // Save the composed frame as PNG
-                val outputFile = destDir.resolve("${i + 1}.png").toFile()
-                ImageIO.write(canvas, "png", outputFile)
+                        // Save the composed frame as PNG
+                        val outputFile = destDir.resolve("${i + 1}.png").toFile()
+                        ImageIO.write(canvas, "png", outputFile)
 
-                // Handle disposal method for the NEXT frame
-                when (metadata.disposalMethod) {
-                    "restoreToBackgroundColor" -> {
-                        // Clear the frame area to transparent
-                        val g2 = canvas.createGraphics()
-                        g2.composite = AlphaComposite.Clear
-                        g2.fillRect(metadata.left, metadata.top, metadata.width, metadata.height)
-                        g2.dispose()
+                        // Handle disposal method for the NEXT frame
+                        when (metadata.disposalMethod) {
+                            "restoreToBackgroundColor" -> {
+                                // Clear the frame area to transparent
+                                val g2 = canvas.createGraphics()
+                                g2.composite = AlphaComposite.Clear
+                                g2.fillRect(metadata.left, metadata.top, metadata.width, metadata.height)
+                                g2.dispose()
+                            }
+                            "restoreToPrevious" -> {
+                                // Restore to the saved state
+                                previousCanvas?.let {
+                                    canvas.flush()  // 釋放舊的 canvas
+                                    canvas = copyImage(it)
+                                }
+                            }
+                            // "none" or "doNotDispose" - leave canvas as is
+                        }
+                    } finally {
+                        frame.flush()  // 釋放每幀的原生記憶體
                     }
-                    "restoreToPrevious" -> {
-                        // Restore to the saved state
-                        previousCanvas?.let { canvas = copyImage(it) }
-                    }
-                    // "none" or "doNotDispose" - leave canvas as is
                 }
+            } finally {
+                // 確保清理所有 BufferedImage 資源
+                canvas.flush()
+                previousCanvas?.flush()
+                reader.dispose()
             }
 
-            reader.dispose()
             return frameCount
         }
     }

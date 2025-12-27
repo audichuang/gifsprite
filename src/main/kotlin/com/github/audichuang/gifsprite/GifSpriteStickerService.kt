@@ -26,6 +26,7 @@ import javax.swing.ImageIcon
 import kotlin.math.max
 import kotlin.math.min
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 
 private const val DEFAULT_SIZE_DIP = 128
@@ -84,7 +85,7 @@ class GifSpriteStickerService(private val project: Project)
     @Volatile
     private var idleIconList: List<Icon> = emptyList()
     
-    private var currentFrame = 0
+    private val currentFrame = AtomicInteger(0)
     private var punchTimer: Timer? = null
     private var autoPlayTimer: Timer? = null  // Timer for auto-play mode
     private var idleCheckTimer: Timer? = null // Timer to check if we should enter idle mode
@@ -96,6 +97,16 @@ class GifSpriteStickerService(private val project: Project)
     private val MIN_FRAME_INTERVAL get() = state.animationSpeed.toLong()
     private var attachRetryCount = 0  // 重試計數器，避免無窮重試
     private val MAX_ATTACH_RETRIES = 10
+    
+    // Cache 簽名追蹤，用於判斷是否需要清空 Cache
+    @Volatile
+    private var lastCacheSignature: String = ""
+    
+    // 防止重複載入資源，使用 pending 機制處理設定改變
+    @Volatile
+    private var isLoadingResources: Boolean = false
+    @Volatile
+    private var pendingReload: Boolean = false
 
     private val connection = ApplicationManager.getApplication().messageBus.connect(this)
 
@@ -122,45 +133,85 @@ class GifSpriteStickerService(private val project: Project)
      * @param initTimers 如果為 true，在資源載入完成後初始化 timers（用於 loadState 恢復設定）
      */
     private fun loadResourcesAsync(initTimers: Boolean = false) {
+        // 如果正在載入中，設定 pending 標記，等當前載入完成後會自動重新載入
+        if (isLoadingResources) {
+            pendingReload = true
+            return
+        }
+        isLoadingResources = true
+        pendingReload = false
+        
         // 1. Snapshot state variables needed for loading to avoid race conditions
         val packName = state.selectedSpritePack
         val idlePackName = state.idleSpritePack
         val useIdle = state.enableIdleMode
         val size = state.sizeDip
         val alpha = state.opacity
+        val shouldAttach = state.visible && panel == null
+        
+        // 生成當前設定的唯一簽名
+        val currentSignature = "$packName|$idlePackName|$useIdle|$size|$alpha"
         
         // 2. Run on background thread
         ApplicationManager.getApplication().executeOnPooledThread {
-            val newActive = loadPackIcons(packName, size, alpha)
-            val newIdle = if (useIdle) loadPackIcons(idlePackName, size, alpha) else emptyList()
-            
-            // 3. Update state on EDT
-            SwingUtilities.invokeLater {
-                activeIcons = newActive
-                idleIconList = newIdle
-                
-                // Update current display
-                if (isIdle && useIdle) {
-                    animationIcons = idleIconList
-                } else {
-                    animationIcons = activeIcons
+            try {
+                // 記憶體管理：如果設定改變（例如切換了 Pack），清空舊的 Cache
+                // 這是防止記憶體洩漏的最重要步驟
+                if (lastCacheSignature != currentSignature) {
+                    iconCache.clear()
+                    lastCacheSignature = currentSignature
                 }
                 
-                // Update idleIcon (single icon) for display
-                idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else com.intellij.icons.AllIcons.General.Information
+                val newActive = loadPackIcons(packName, size, alpha)
+                val newIdle = if (useIdle) loadPackIcons(idlePackName, size, alpha) else emptyList()
                 
-                // Refresh UI
-                currentFrame = 0
-                label?.apply {
-                    icon = idleIcon
-                    repaint()
+                // 3. Update state on EDT
+                SwingUtilities.invokeLater {
+                    isLoadingResources = false
+                    
+                    // 檢查是否已經 dispose，避免在關閉專案後更新 UI
+                    if (project.isDisposed) return@invokeLater
+                    
+                    activeIcons = newActive
+                    idleIconList = newIdle
+                    
+                    // Update current display
+                    if (isIdle && useIdle) {
+                        animationIcons = idleIconList
+                    } else {
+                        animationIcons = activeIcons
+                    }
+                    
+                    // Update idleIcon (single icon) for display
+                    idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else com.intellij.icons.AllIcons.General.Information
+                    
+                    // Refresh UI
+                    currentFrame.set(0)
+                    label?.apply {
+                        icon = idleIcon
+                        repaint()
+                    }
+                    
+                    // 資源載入完成後初始化 timers（如果需要）
+                    // 這解決了 loadState() 恢復設定後 idle timer 沒有啟動的問題
+                    if (initTimers) {
+                        initializeTimersFromState()
+                    }
+                    
+                    // 資源載入完成後，如果 visible 且 panel 還沒創建，觸發 attach
+                    if (shouldAttach && panel == null && animationIcons.isNotEmpty()) {
+                        ensureAttached()
+                    }
+                    
+                    // 如果有 pending reload 請求，重新載入（設定在載入過程中改變了）
+                    if (pendingReload) {
+                        pendingReload = false
+                        loadResourcesAsync()
+                    }
                 }
-                
-                // 資源載入完成後初始化 timers（如果需要）
-                // 這解決了 loadState() 恢復設定後 idle timer 沒有啟動的問題
-                if (initTimers) {
-                    initializeTimersFromState()
-                }
+            } catch (e: Exception) {
+                isLoadingResources = false
+                pendingReload = false
             }
         }
     }
@@ -233,13 +284,11 @@ class GifSpriteStickerService(private val project: Project)
             return
         }
 
-        // 確保資源已載入，如果還沒載入則先載入再重試
-        // 這解決了啟動時 loadState() 還沒被調用導致圖示為空的問題
+        // 確保資源已載入，如果還沒載入則先載入
+        // loadResourcesAsync 完成後會自動呼叫 ensureAttached（如果 visible && panel == null）
         if (animationIcons.isEmpty() || idleIcon == null) {
             loadResourcesAsync()
-            // 資源載入是異步的，等載入完成後會在 loadResourcesAsync 的 callback 中更新 UI
-            // 這裡安排一次重試，讓載入完成後再附加
-            app.invokeLater({ ensureAttached() }, ModalityState.any())
+            // 不需要額外排程重試，loadResourcesAsync 完成後會自動觸發
             return
         }
 
@@ -389,8 +438,9 @@ class GifSpriteStickerService(private val project: Project)
 
         // Clear resources (replace with empty list instead of clear)
         animationIcons = emptyList()
-        currentFrame = 0
+        currentFrame.set(0)
         iconCache.clear()
+        lastCacheSignature = ""
     }
 
     fun applySize(newDip: Int) {
@@ -400,6 +450,9 @@ class GifSpriteStickerService(private val project: Project)
             ensureAttached()
         }
 
+        // 清除舊尺寸的快取，避免記憶體洩漏
+        iconCache.clear()
+        lastCacheSignature = ""
         // Reload all icons with new size
         loadResourcesAsync()
 
@@ -410,8 +463,9 @@ class GifSpriteStickerService(private val project: Project)
             minimumSize   = preferredSize
             maximumSize   = preferredSize
             setBounds(0, 0, sizePx.toInt(), sizePx)
-            icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
-                animationIcons[currentFrame]
+            val frame = currentFrame.get()
+            icon = if (animationIcons.isNotEmpty() && frame < animationIcons.size) {
+                animationIcons[frame]
             } else {
                 idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
@@ -437,13 +491,17 @@ class GifSpriteStickerService(private val project: Project)
     fun applyOpacity(newOpacity: Int) {
         state.opacity = newOpacity.coerceIn(0, 100)
         
+        // 清除舊透明度的快取，避免記憶體洩漏
+        iconCache.clear()
+        lastCacheSignature = ""
         // Reload all icons with new opacity
         loadResourcesAsync()
         
         // Update current frame immediately
         label?.apply {
-            icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
-                animationIcons[currentFrame]
+            val frame = currentFrame.get()
+            icon = if (animationIcons.isNotEmpty() && frame < animationIcons.size) {
+                animationIcons[frame]
             } else {
                 idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
@@ -520,7 +578,7 @@ class GifSpriteStickerService(private val project: Project)
                 stopAutoPlay()
                 setupIdleTimer()
                 // Reset to first frame
-                currentFrame = 0
+                currentFrame.set(0)
                 label?.icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
         }
@@ -579,7 +637,7 @@ class GifSpriteStickerService(private val project: Project)
         animationIcons = if (idleIconList.isNotEmpty()) idleIconList else activeIcons
         
         // Update UI to show idle icon
-        currentFrame = 0
+        currentFrame.set(0)
         label?.apply {
             icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
             repaint()
@@ -594,7 +652,7 @@ class GifSpriteStickerService(private val project: Project)
         animationIcons = activeIcons
         
         // Reset to active icon
-        currentFrame = 0
+        currentFrame.set(0)
         label?.apply {
              icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
              repaint()
@@ -683,8 +741,8 @@ class GifSpriteStickerService(private val project: Project)
             // 使用本地快照避免並發問題
             val icons = animationIcons
             if (icons.isNotEmpty()) {
-                currentFrame = (currentFrame + 1) % icons.size
-                val nextIcon = icons[currentFrame]
+                val frame = currentFrame.updateAndGet { (it + 1) % icons.size }
+                val nextIcon = icons[frame]
                 SwingUtilities.invokeLater {
                     label?.icon = nextIcon
                 }
@@ -749,7 +807,7 @@ class GifSpriteStickerService(private val project: Project)
         resetAnimationTimer?.stop()
         resetAnimationTimer = Timer(2000) {
             if (!isIdle) { // Only reset if not already in idle mode
-                currentFrame = 0
+                currentFrame.set(0)
                 val icon = idleIcon
                 if (label != null && icon != null) {
                     SwingUtilities.invokeLater {
@@ -792,8 +850,8 @@ class GifSpriteStickerService(private val project: Project)
         if (getAnimationMode() == AnimationMode.TYPE_TRIGGERED) {
             val icons = animationIcons
             if (icons.isNotEmpty()) {
-                currentFrame = (currentFrame + 1) % icons.size
-                val nextIcon = icons[currentFrame]
+                val frame = currentFrame.updateAndGet { (it + 1) % icons.size }
+                val nextIcon = icons[frame]
                 SwingUtilities.invokeLater {
                     lbl.icon = nextIcon
                 }

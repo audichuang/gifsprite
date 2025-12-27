@@ -27,7 +27,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
     private var root: JComponent? = null
     
-    // Main settings
+    // Main settings - these are always initialized in createComponent()
     private lateinit var enableCheck: JCheckBox
     private lateinit var sizeSlider: JSlider
     private lateinit var sizeLabel: JLabel
@@ -39,30 +39,34 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private lateinit var opacityLabel: JLabel
     private lateinit var previewLabel: JLabel
     
-    // Behavior Mode
-    private lateinit var behaviorModeComboBox: JComboBox<String>
+    // Behavior Mode (nullable to avoid lateinit complexity)
+    private var behaviorModeComboBox: JComboBox<String>? = null
     private val behaviorModeDisplayNames = arrayOf(
         "Single (單一圖片)",
         "Idle (閒置休息)",
         "Playlist (自動輪播)"
     )
     
-    // Dynamic Settings Panels - will show/hide based on mode
-    private lateinit var idleSettingsPanel: JPanel
-    private lateinit var playlistSettingsPanel: JPanel
+    // Dynamic Settings Panels - will show/hide based on mode (nullable to avoid lateinit complexity)
+    private var singleSettingsPanel: JPanel? = null
+    private var idleSettingsPanel: JPanel? = null
+    private var playlistSettingsPanel: JPanel? = null
     
-    // Idle Mode UI
-    private lateinit var idleActivePackComboBox: JComboBox<String>  // Active GIF for idle mode
-    private lateinit var idlePackComboBox: JComboBox<String>        // Idle/rest GIF
-    private lateinit var idleTimeoutSlider: JSlider
-    private lateinit var idleTimeoutLabel: JLabel
+    // Single Mode UI
+    private var singlePackComboBox: JComboBox<String>? = null
     
-    // Playlist UI
-    private lateinit var playlistList: JBList<String>
-    private lateinit var playlistModel: DefaultListModel<String>
-    private lateinit var playlistAddComboBox: JComboBox<String>
-    private lateinit var playlistIntervalSlider: JSlider
-    private lateinit var playlistIntervalLabel: JLabel
+    // Idle Mode UI (nullable to avoid lateinit complexity)
+    private var idleActivePackComboBox: JComboBox<String>? = null  // Active GIF for idle mode
+    private var idlePackComboBox: JComboBox<String>? = null        // Idle/rest GIF
+    private var idleTimeoutSlider: JSlider? = null
+    private var idleTimeoutLabel: JLabel? = null
+    
+    // Playlist UI (nullable to avoid lateinit complexity)
+    private var playlistList: JBList<String>? = null
+    private var playlistModel: DefaultListModel<String>? = null
+    private var playlistAddComboBox: JComboBox<String>? = null
+    private var playlistIntervalSlider: JSlider? = null
+    private var playlistIntervalLabel: JLabel? = null
     
     private val svc by lazy { project.service<GifSpriteStickerService>() }
     
@@ -99,12 +103,19 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         leftPanel.add(Box.createVerticalStrut(10))
         
         // --- 4. Dynamic: Mode-specific Settings ---
-        idleSettingsPanel = createIdleSettingsPanel()
-        leftPanel.add(idleSettingsPanel)
+        val singlePanel = createSingleSettingsPanel()
+        singleSettingsPanel = singlePanel
+        leftPanel.add(singlePanel)
         leftPanel.add(Box.createVerticalStrut(10))
         
-        playlistSettingsPanel = createPlaylistSettingsPanel()
-        leftPanel.add(playlistSettingsPanel)
+        val idlePanel = createIdleSettingsPanel()
+        idleSettingsPanel = idlePanel
+        leftPanel.add(idlePanel)
+        leftPanel.add(Box.createVerticalStrut(10))
+        
+        val playlistPanel = createPlaylistSettingsPanel()
+        playlistSettingsPanel = playlistPanel
+        leftPanel.add(playlistPanel)
         leftPanel.add(Box.createVerticalStrut(10))
         
         // --- 5. Customization (Bottom) ---
@@ -276,6 +287,23 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         }
     }
     
+    private fun createSingleSettingsPanel(): JPanel {
+        return panel {
+            group("Single Settings (單一圖片設定)") {
+                row("使用的 GIF:") {
+                    singlePackComboBox = comboBox(GifSpriteManager.getAvailablePacks())
+                        .applyToComponent {
+                            selectedItem = svc.getSelectedSpritePack()
+                            addActionListener { updatePreview() }
+                        }.component
+                }
+                row {
+                    comment("選擇要顯示的 GIF 圖片")
+                }
+            }
+        }
+    }
+    
     private fun createIdleSettingsPanel(): JPanel {
         return panel {
             group("Idle Settings (閒置設定)") {
@@ -299,7 +327,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         paintTicks = false
                         paintLabels = false
                         addChangeListener {
-                            idleTimeoutLabel.text = "等待時間: $value 秒"
+                            idleTimeoutLabel?.text = "等待時間: $value 秒"
                         }
                     }.component
                 }
@@ -321,8 +349,9 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     label("輪播清單:")
                 }
                 row {
-                    playlistModel = DefaultListModel<String>()
-                    playlistList = JBList(playlistModel)
+                    val model = DefaultListModel<String>()
+                    playlistModel = model
+                    playlistList = JBList(model)
                     
                     val scrollPane = JBScrollPane(playlistList).apply {
                         preferredSize = Dimension(250, 80)
@@ -331,7 +360,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     
                     panel {
                         row { button("移除選取") { removeFromPlaylist() } }
-                        row { button("清空全部") { playlistModel.clear() } }
+                        row { button("清空全部") { playlistModel?.clear() } }
                     }
                 }
                 row {
@@ -340,7 +369,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         paintTicks = false
                         paintLabels = false
                         addChangeListener {
-                            playlistIntervalLabel.text = "輪播間隔: $value 分鐘"
+                            playlistIntervalLabel?.text = "輪播間隔: $value 分鐘"
                         }
                     }.component
                 }
@@ -364,7 +393,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     }
     
     private fun getBehaviorModeSettings(): Pair<Boolean, Boolean> {
-        val index = if (::behaviorModeComboBox.isInitialized) behaviorModeComboBox.selectedIndex else 0
+        val index = behaviorModeComboBox?.selectedIndex ?: 0
         return when (index) {
             0 -> Pair(false, false)  // Normal
             1 -> Pair(true, false)   // Idle
@@ -374,16 +403,14 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     }
     
     private fun updateBehaviorModeUI() {
-        if (!::behaviorModeComboBox.isInitialized) return
+        val combo = behaviorModeComboBox ?: return
+        val index = combo.selectedIndex
         
-        val (showIdle, showPlaylist) = getBehaviorModeSettings()
-        
-        if (::idleSettingsPanel.isInitialized) {
-            idleSettingsPanel.isVisible = showIdle
-        }
-        if (::playlistSettingsPanel.isInitialized) {
-            playlistSettingsPanel.isVisible = showPlaylist
-        }
+        // Show/hide panels based on mode
+        // index 0 = Single, 1 = Idle, 2 = Playlist
+        singleSettingsPanel?.isVisible = (index == 0)
+        idleSettingsPanel?.isVisible = (index == 1)
+        playlistSettingsPanel?.isVisible = (index == 2)
         
         // Refresh layout
         root?.revalidate()
@@ -484,38 +511,47 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         packComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
         packComboBox.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
         
-        if (::idleActivePackComboBox.isInitialized) {
-            idleActivePackComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
-            idleActivePackComboBox.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
+        // Single 模式 GIF 選擇
+        singlePackComboBox?.let {
+            it.model = DefaultComboBoxModel(packs.toTypedArray())
+            it.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
         }
-        if (::idlePackComboBox.isInitialized) {
-            val prevIdle = idlePackComboBox.selectedItem
-            idlePackComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
-            idlePackComboBox.selectedItem = prevIdle ?: svc.state.idleSpritePack
+        
+        idleActivePackComboBox?.let {
+            it.model = DefaultComboBoxModel(packs.toTypedArray())
+            it.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
         }
-        if (::playlistAddComboBox.isInitialized) {
-            playlistAddComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
+        idlePackComboBox?.let {
+            val prevIdle = it.selectedItem
+            it.model = DefaultComboBoxModel(packs.toTypedArray())
+            it.selectedItem = prevIdle ?: svc.state.idleSpritePack
+        }
+        playlistAddComboBox?.let {
+            it.model = DefaultComboBoxModel(packs.toTypedArray())
         }
     }
 
     private fun addToPlaylist() {
-        val selected = playlistAddComboBox.selectedItem as? String ?: return
-        if (!playlistModel.contains(selected)) {
-            playlistModel.addElement(selected)
+        val selected = playlistAddComboBox?.selectedItem as? String ?: return
+        val model = playlistModel ?: return
+        if (!model.contains(selected)) {
+            model.addElement(selected)
         }
     }
     
     private fun removeFromPlaylist() {
-        val index = playlistList.selectedIndex
+        val index = playlistList?.selectedIndex ?: return
         if (index >= 0) {
-            playlistModel.remove(index)
+            playlistModel?.remove(index)
         }
     }
 
     // ========== Configurable Interface ==========
 
     override fun isModified(): Boolean {
-        val selectedPack = packComboBox.selectedItem as? String ?: "default"
+        // 優先使用 singlePackComboBox 的值
+        val selectedPack = singlePackComboBox?.selectedItem as? String 
+            ?: packComboBox.selectedItem as? String ?: "default"
         val selectedModeIndex = modeComboBox.selectedIndex
         val selectedMode = if (selectedModeIndex >= 0 && selectedModeIndex < animModeValues.size) {
             animModeValues[selectedModeIndex]
@@ -524,13 +560,13 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         val (enableIdle, enablePlaylist) = getBehaviorModeSettings()
         val behaviorModified = enableIdle != svc.state.enableIdleMode || enablePlaylist != svc.state.enablePlaylist
         
-        val idlePack = if (::idlePackComboBox.isInitialized) idlePackComboBox.selectedItem as? String ?: "default" else "default"
+        val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
         val idleModified = idlePack != svc.state.idleSpritePack ||
-                           (if (::idleTimeoutSlider.isInitialized) idleTimeoutSlider.value else svc.state.idleTimeout) != svc.state.idleTimeout
+                           (idleTimeoutSlider?.value ?: svc.state.idleTimeout) != svc.state.idleTimeout
                            
         val currentPlaylist = svc.state.playlist
-        val uiPlaylist = if (::playlistModel.isInitialized) playlistModel.elements().toList() else emptyList()
-        val playlistModified = (if (::playlistIntervalSlider.isInitialized) playlistIntervalSlider.value else svc.state.playlistInterval) != svc.state.playlistInterval ||
+        val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
+        val playlistModified = (playlistIntervalSlider?.value ?: svc.state.playlistInterval) != svc.state.playlistInterval ||
                                currentPlaylist != uiPlaylist
 
         return enableCheck.isSelected != svc.isVisible() ||
@@ -554,16 +590,13 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         val selectedPack = when {
             enableIdle -> {
                 // Idle 模式：使用「活動時的 GIF」
-                if (::idleActivePackComboBox.isInitialized) {
-                    idleActivePackComboBox.selectedItem as? String ?: "default"
-                } else {
-                    packComboBox.selectedItem as? String ?: "default"
-                }
+                idleActivePackComboBox?.selectedItem as? String
+                    ?: singlePackComboBox?.selectedItem as? String ?: "default"
             }
             enablePlaylist -> {
                 // Playlist 模式：使用清單中的第一個（或當前選擇的項目如果在清單中）
-                val uiPlaylist = if (::playlistModel.isInitialized) playlistModel.elements().toList() else emptyList()
-                val currentPack = packComboBox.selectedItem as? String ?: "default"
+                val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
+                val currentPack = singlePackComboBox?.selectedItem as? String ?: "default"
                 if (uiPlaylist.isNotEmpty() && !uiPlaylist.contains(currentPack)) {
                     uiPlaylist.first()
                 } else {
@@ -571,8 +604,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                 }
             }
             else -> {
-                // Single 模式：使用 packComboBox 的值
-                packComboBox.selectedItem as? String ?: "default"
+                // Single 模式：使用 singlePackComboBox 的值
+                singlePackComboBox?.selectedItem as? String ?: "default"
             }
         }
         svc.changeSpritePack(selectedPack)
@@ -586,12 +619,12 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         svc.setAnimationSpeed(speedSlider.value)
         svc.applyOpacity(opacitySlider.value)
         
-        val idlePack = if (::idlePackComboBox.isInitialized) idlePackComboBox.selectedItem as? String ?: "default" else "default"
-        val idleTimeout = if (::idleTimeoutSlider.isInitialized) idleTimeoutSlider.value else svc.state.idleTimeout
+        val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
+        val idleTimeout = idleTimeoutSlider?.value ?: svc.state.idleTimeout
         svc.setIdleMode(enableIdle, idlePack, idleTimeout)
         
-        val uiPlaylist = if (::playlistModel.isInitialized) playlistModel.elements().toList() else emptyList()
-        val playlistInterval = if (::playlistIntervalSlider.isInitialized) playlistIntervalSlider.value else svc.state.playlistInterval
+        val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
+        val playlistInterval = playlistIntervalSlider?.value ?: svc.state.playlistInterval
         svc.setPlaylistMode(enablePlaylist, uiPlaylist, playlistInterval)
 
         if (svc.isVisible()) svc.ensureAttached()
@@ -602,36 +635,32 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         sizeSlider.value = svc.getSizeDip()
         sizeLabel.text = "大小: ${svc.getSizeDip()} DIP"
         
-        if (::modeComboBox.isInitialized) {
-            val modeIndex = animModeValues.indexOf(svc.getAnimationMode().name)
-            modeComboBox.selectedIndex = modeIndex.coerceAtLeast(0)
+        modeComboBox.selectedIndex = animModeValues.indexOf(svc.getAnimationMode().name).coerceAtLeast(0)
+        
+        speedSlider.value = svc.getAnimationSpeed()
+        speedLabel.text = "速度: ${svc.getAnimationSpeed()} ms/frame"
+        
+        opacitySlider.value = svc.getOpacity()
+        opacityLabel.text = "透明度: ${svc.getOpacity()}%"
+        
+        // Single 模式 GIF 選擇器
+        singlePackComboBox?.selectedItem = svc.getSelectedSpritePack()
+        
+        idlePackComboBox?.let {
+            it.selectedItem = svc.state.idleSpritePack
+            idleTimeoutSlider?.value = svc.state.idleTimeout
+            idleTimeoutLabel?.text = "等待時間: ${svc.state.idleTimeout} 秒"
         }
         
-        if (::speedSlider.isInitialized) {
-            speedSlider.value = svc.getAnimationSpeed()
-            speedLabel.text = "速度: ${svc.getAnimationSpeed()} ms/frame"
+        playlistModel?.let { model ->
+            playlistIntervalSlider?.value = svc.state.playlistInterval
+            playlistIntervalLabel?.text = "輪播間隔: ${svc.state.playlistInterval} 分鐘"
+            model.clear()
+            svc.state.playlist.forEach { model.addElement(it) }
         }
         
-        if (::opacitySlider.isInitialized) {
-            opacitySlider.value = svc.getOpacity()
-            opacityLabel.text = "透明度: ${svc.getOpacity()}%"
-        }
-        
-        if (::idlePackComboBox.isInitialized) {
-            idlePackComboBox.selectedItem = svc.state.idleSpritePack
-            idleTimeoutSlider.value = svc.state.idleTimeout
-            idleTimeoutLabel.text = "等待時間: ${svc.state.idleTimeout} 秒"
-        }
-        
-        if (::playlistModel.isInitialized) {
-            playlistIntervalSlider.value = svc.state.playlistInterval
-            playlistIntervalLabel.text = "輪播間隔: ${svc.state.playlistInterval} 分鐘"
-            playlistModel.clear()
-            svc.state.playlist.forEach { playlistModel.addElement(it) }
-        }
-        
-        if (::behaviorModeComboBox.isInitialized) {
-            behaviorModeComboBox.selectedIndex = getCurrentBehaviorModeIndex()
+        behaviorModeComboBox?.let {
+            it.selectedIndex = getCurrentBehaviorModeIndex()
             updateBehaviorModeUI()
         }
         
@@ -642,19 +671,23 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private fun updatePreview() {
         if (!::previewLabel.isInitialized) return
         
-        val packName = packComboBox.selectedItem as? String ?: "default"
+        // 優先使用 singlePackComboBox 的值，如果為 null 則使用 packComboBox
+        val packName = singlePackComboBox?.selectedItem as? String 
+            ?: packComboBox.selectedItem as? String ?: "default"
         val size = sizeSlider.value
         val opacity = opacitySlider.value
         
-        val modeIndex = if (::modeComboBox.isInitialized) modeComboBox.selectedIndex else 0
+        val modeIndex = modeComboBox.selectedIndex
         val isAutoPlay = modeIndex >= 0 && animModeValues.getOrNull(modeIndex) == "AUTO_PLAY"
         
         if (isAutoPlay) {
             val speed = speedSlider.value
             if (previewTimer == null) {
                 previewTimer = Timer(speed) {
-                    if (root == null || !::packComboBox.isInitialized) return@Timer
-                    val currentPack = packComboBox.selectedItem as? String ?: "default"
+                    if (root == null) return@Timer
+                    // 優先使用 singlePackComboBox 的值
+                    val currentPack = singlePackComboBox?.selectedItem as? String 
+                        ?: packComboBox.selectedItem as? String ?: "default"
                     val currentSize = sizeSlider.value
                     val currentOpacity = opacitySlider.value
                     
