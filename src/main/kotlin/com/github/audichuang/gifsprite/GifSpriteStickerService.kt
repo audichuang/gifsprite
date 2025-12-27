@@ -51,6 +51,16 @@ class StickerState {
     var frameCount: Int = 24  // dynamic frame count
     var animationMode: String = "TYPE_TRIGGERED"  // "TYPE_TRIGGERED" or "AUTO_PLAY"
     var opacity: Int = 100 // 0-100 opacity percentage
+    
+    // Idle Mode
+    var enableIdleMode: Boolean = false
+    var idleSpritePack: String = "default"
+    var idleTimeout: Int = 10 // seconds
+
+    // Playlist Mode
+    var enablePlaylist: Boolean = false
+    var playlist: MutableList<String> = mutableListOf()
+    var playlistInterval: Int = 10 // minutes
 }
 
 @State(name = "GifSpriteStickerState", storages = [Storage("gifSpriteState.xml")])
@@ -59,6 +69,7 @@ class GifSpriteStickerService(private val project: Project)
     : PersistentStateComponent<StickerState>, Disposable {
 
     private var state = StickerState()
+    private var isIdle = false // Runtime state tracking
 
     private var layeredPane: JLayeredPane? = null
     private var lpResizeListener: ComponentListener? = null
@@ -66,9 +77,18 @@ class GifSpriteStickerService(private val project: Project)
     private var label: JBLabel? = null
     @Volatile
     private var animationIcons: List<Icon> = emptyList()
+    
+    // Cache for instant switching
+    @Volatile
+    private var activeIcons: List<Icon> = emptyList()
+    @Volatile
+    private var idleIconList: List<Icon> = emptyList()
+    
     private var currentFrame = 0
     private var punchTimer: Timer? = null
     private var autoPlayTimer: Timer? = null  // Timer for auto-play mode
+    private var idleCheckTimer: Timer? = null // Timer to check if we should enter idle mode
+    private var playlistTimer: Timer? = null  // Timer for playlist rotation
 
     // Performance optimizations
     private val iconCache = ConcurrentHashMap<String, Icon>()
@@ -79,44 +99,129 @@ class GifSpriteStickerService(private val project: Project)
 
     private val connection = ApplicationManager.getApplication().messageBus.connect(this)
 
-    private lateinit var idleIcon: Icon
+    private var idleIcon: Icon? = null
 
 
     init {
-        // Load icons for selected sprite pack
-        reloadAnimationIcons()
-
+        // Subscribe to typing events for animation
         connection.subscribe(GifSpriteTopic.TOPIC, object : GifSpriteTopic {
             override fun tapped() = onTap()
         })
+        // Note: loadResourcesAsync() is called in loadState() after settings are restored
     }
 
     /**
      * Reload animation icons from the current sprite pack.
      */
-    private fun reloadAnimationIcons() {
-        iconCache.clear()
-
+    /**
+     * Reload animation icons from the current sprite pack.
+     */
+    /**
+     * Load resources appropriately (async if called from UI thread, sync if necessary/safe).
+     * Populates activeIcons and idleIconList, then updates animationIcons.
+     * @param initTimers 如果為 true，在資源載入完成後初始化 timers（用於 loadState 恢復設定）
+     */
+    private fun loadResourcesAsync(initTimers: Boolean = false) {
+        // 1. Snapshot state variables needed for loading to avoid race conditions
         val packName = state.selectedSpritePack
-        state.frameCount = GifSpriteManager.getFrameCount(packName)
-
-        // 建立新的 List 再原子替換，避免並發問題
-        val newIcons = mutableListOf<Icon>()
-        for (i in 1..state.frameCount) {
-            val path = GifSpriteManager.getFramePath(packName, i)
-            val icon = loadScaledIcon(path, state.sizeDip, state.opacity, GifSpriteManager.isCustomPack(packName))
-            newIcons.add(icon)
+        val idlePackName = state.idleSpritePack
+        val useIdle = state.enableIdleMode
+        val size = state.sizeDip
+        val alpha = state.opacity
+        
+        // 2. Run on background thread
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val newActive = loadPackIcons(packName, size, alpha)
+            val newIdle = if (useIdle) loadPackIcons(idlePackName, size, alpha) else emptyList()
+            
+            // 3. Update state on EDT
+            SwingUtilities.invokeLater {
+                activeIcons = newActive
+                idleIconList = newIdle
+                
+                // Update current display
+                if (isIdle && useIdle) {
+                    animationIcons = idleIconList
+                } else {
+                    animationIcons = activeIcons
+                }
+                
+                // Update idleIcon (single icon) for display
+                idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else com.intellij.icons.AllIcons.General.Information
+                
+                // Refresh UI
+                currentFrame = 0
+                label?.apply {
+                    icon = idleIcon
+                    repaint()
+                }
+                
+                // 資源載入完成後初始化 timers（如果需要）
+                // 這解決了 loadState() 恢復設定後 idle timer 沒有啟動的問題
+                if (initTimers) {
+                    initializeTimersFromState()
+                }
+            }
         }
-        animationIcons = newIcons.toList()  // 原子替換
-
-        idleIcon = if (animationIcons.isNotEmpty()) animationIcons[0] else {
-            com.intellij.icons.AllIcons.General.Information
+    }
+    
+    private fun loadPackIcons(packName: String, sizeDip: Int, opacity: Int): List<Icon> {
+        val count = GifSpriteManager.getFrameCount(packName)
+        val list = mutableListOf<Icon>()
+        val validPack = if (count > 0) packName else "default"
+        val validCount = if (count > 0) count else GifSpriteManager.getFrameCount("default")
+        
+        for (i in 1..validCount) {
+             val path = GifSpriteManager.getFramePath(validPack, i)
+             val icon = loadScaledIcon(path, sizeDip, opacity, GifSpriteManager.isCustomPack(validPack))
+             list.add(icon)
         }
+        return list
+    }
+
+    // Deprecated sync method, redirect to async or keep empty
+    private fun reloadAnimationIcons() {
+        loadResourcesAsync()
     }
 
     // ---------- PersistentStateComponent ----------
     override fun getState(): StickerState = state
-    override fun loadState(s: StickerState) { state = s }
+    override fun loadState(s: StickerState) { 
+        state = s 
+        // Reload resources after state is loaded, initTimers=true 確保 timers 在資源載入後初始化
+        loadResourcesAsync(initTimers = true)
+        // Re-attach if visible (state may have changed after initial startup)
+        if (state.visible) {
+            ApplicationManager.getApplication().invokeLater { 
+                ensureAttached()
+            }
+        }
+    }
+    
+    /**
+     * 根據當前 state 初始化所有 timers。
+     * 這會在 loadState() 恢復設定後被調用。
+     */
+    private fun initializeTimersFromState() {
+        // 停止現有的 timers
+        idleCheckTimer?.stop()
+        playlistTimer?.stop()
+        
+        // 根據動畫模式初始化
+        if (getAnimationMode() == AnimationMode.AUTO_PLAY) {
+            startAutoPlay()
+        } else {
+            // 對於 TYPE_TRIGGERED 模式，根據 idle 設定初始化
+            if (state.enableIdleMode) {
+                setupIdleTimer()
+            }
+        }
+        
+        // 初始化 playlist timer
+        if (state.enablePlaylist) {
+            setupPlaylistTimer()
+        }
+    }
 
     // ---------- Lifecycle ----------
     fun ensureAttached() {
@@ -124,6 +229,16 @@ class GifSpriteStickerService(private val project: Project)
 
         val app = ApplicationManager.getApplication()
         if (!app.isDispatchThread) {
+            app.invokeLater({ ensureAttached() }, ModalityState.any())
+            return
+        }
+
+        // 確保資源已載入，如果還沒載入則先載入再重試
+        // 這解決了啟動時 loadState() 還沒被調用導致圖示為空的問題
+        if (animationIcons.isEmpty() || idleIcon == null) {
+            loadResourcesAsync()
+            // 資源載入是異步的，等載入完成後會在 loadResourcesAsync 的 callback 中更新 UI
+            // 這裡安排一次重試，讓載入完成後再附加
             app.invokeLater({ ensureAttached() }, ModalityState.any())
             return
         }
@@ -178,8 +293,12 @@ class GifSpriteStickerService(private val project: Project)
         } else {
             setupIdleTimer()
         }
+        
+        setupPlaylistTimer()
 
-        label = JBLabel(idleIcon).apply {
+        // idleIcon 已確保不為 null（上面有檢查）
+        val currentIcon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
+        label = JBLabel(currentIcon).apply {
             horizontalAlignment = JBLabel.CENTER
             verticalAlignment = JBLabel.CENTER
             toolTipText = "GifSprite"
@@ -250,8 +369,11 @@ class GifSpriteStickerService(private val project: Project)
         lpResizeListener = null
 
         // Stop timers
-        idleTimer?.stop()
-        idleTimer = null
+        // Stop timers
+        resetAnimationTimer?.stop()
+        resetAnimationTimer = null
+        idleCheckTimer?.stop()
+        idleCheckTimer = null
         punchTimer?.stop()
         punchTimer = null
         autoPlayTimer?.stop()
@@ -279,7 +401,7 @@ class GifSpriteStickerService(private val project: Project)
         }
 
         // Reload all icons with new size
-        reloadAnimationIcons()
+        loadResourcesAsync()
 
         val sizePx = JBUI.scale(state.sizeDip)
 
@@ -291,7 +413,7 @@ class GifSpriteStickerService(private val project: Project)
             icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
                 animationIcons[currentFrame]
             } else {
-                idleIcon
+                idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
             revalidate()
             repaint()
@@ -316,14 +438,14 @@ class GifSpriteStickerService(private val project: Project)
         state.opacity = newOpacity.coerceIn(0, 100)
         
         // Reload all icons with new opacity
-        reloadAnimationIcons()
+        loadResourcesAsync()
         
         // Update current frame immediately
         label?.apply {
             icon = if (animationIcons.isNotEmpty() && currentFrame < animationIcons.size) {
                 animationIcons[currentFrame]
             } else {
-                idleIcon
+                idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
             repaint()
         }
@@ -353,11 +475,11 @@ class GifSpriteStickerService(private val project: Project)
         if (state.selectedSpritePack == packName) return
 
         state.selectedSpritePack = packName
-        reloadAnimationIcons()
+        loadResourcesAsync()
 
         // Update the current label if attached
         label?.apply {
-            icon = idleIcon
+            icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
             revalidate()
             repaint()
         }
@@ -390,7 +512,7 @@ class GifSpriteStickerService(private val project: Project)
         when (mode) {
             AnimationMode.AUTO_PLAY -> {
                 // Stop idle timer and start auto-play
-                idleTimer?.stop()
+                resetAnimationTimer?.stop()
                 startAutoPlay()
             }
             AnimationMode.TYPE_TRIGGERED -> {
@@ -399,7 +521,7 @@ class GifSpriteStickerService(private val project: Project)
                 setupIdleTimer()
                 // Reset to first frame
                 currentFrame = 0
-                label?.icon = idleIcon
+                label?.icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
             }
         }
     }
@@ -427,6 +549,110 @@ class GifSpriteStickerService(private val project: Project)
     
     fun setOpacity(opacity: Int) {
         state.opacity = opacity.coerceIn(0, 100)
+    }
+
+    // ---------- Idle Mode ----------
+    fun setIdleMode(enable: Boolean, idlePack: String, timeoutSec: Int) {
+        state.enableIdleMode = enable
+        state.idleSpritePack = idlePack
+        state.idleTimeout = timeoutSec
+        
+        if (enable) {
+            // 停止 playlist timer（模式互斥）
+            playlistTimer?.stop()
+            state.enablePlaylist = false
+            
+            // 重新載入 idle icons（休息時的 GIF）
+            loadResourcesAsync()
+            setupIdleTimer()
+        } else {
+            idleCheckTimer?.stop()
+            if (isIdle) wakeUp()
+        }
+    }
+    
+    private fun enterIdleMode() {
+        if (isIdle || !state.enableIdleMode) return
+        
+        isIdle = true
+        // Instant swap
+        animationIcons = if (idleIconList.isNotEmpty()) idleIconList else activeIcons
+        
+        // Update UI to show idle icon
+        currentFrame = 0
+        label?.apply {
+            icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
+            repaint()
+        }
+    }
+    
+    private fun wakeUp() {
+        if (!isIdle) return
+        
+        isIdle = false
+        // Instant swap
+        animationIcons = activeIcons
+        
+        // Reset to active icon
+        currentFrame = 0
+        label?.apply {
+             icon = idleIcon ?: com.intellij.icons.AllIcons.General.Information
+             repaint()
+        }
+        
+        // Restart playlist timer if needed (to ensure full duration)
+        if (state.enablePlaylist && !state.enableIdleMode) {
+             setupPlaylistTimer()
+        }
+    }
+
+    // ---------- Playlist Mode ----------
+    fun setPlaylistMode(enable: Boolean, newPlaylist: List<String>, intervalMin: Int) {
+        state.enablePlaylist = enable
+        state.playlist = newPlaylist.toMutableList()
+        state.playlistInterval = intervalMin
+        
+        if (enable) {
+            // 停止 idle timer（模式互斥）
+            idleCheckTimer?.stop()
+            state.enableIdleMode = false
+            if (isIdle) wakeUp()
+        }
+        
+        setupPlaylistTimer()
+    }
+
+    private fun setupPlaylistTimer() {
+        playlistTimer?.stop()
+        if (state.enablePlaylist && state.playlist.isNotEmpty()) {
+            // 確保當前選擇的 GIF 在輪播清單中
+            // 如果不在清單中，立即切換到清單的第一個 GIF
+            if (!state.playlist.contains(state.selectedSpritePack)) {
+                val firstPack = state.playlist.first()
+                changeSpritePack(firstPack)
+            }
+            
+            val intervalMs = (state.playlistInterval * 60 * 1000).coerceAtLeast(10000) // Min 10 sec
+            playlistTimer = Timer(intervalMs) {
+                rotatePlaylist()
+            }.apply { isRepeats = true; start() }
+        }
+    }
+
+    private fun rotatePlaylist() {
+        // Don't rotate if we are in idle mode (wait until wakeup)
+        if (isIdle) return
+        
+        if (state.playlist.isEmpty()) return
+
+        val currentIndex = state.playlist.indexOf(state.selectedSpritePack)
+        val nextIndex = (currentIndex + 1) % state.playlist.size
+        val nextPack = state.playlist[nextIndex]
+
+        // Only change if different (and valid)
+        if (nextPack != state.selectedSpritePack) {
+            changeSpritePack(nextPack)
+        }
     }
 
     /**
@@ -484,8 +710,12 @@ class GifSpriteStickerService(private val project: Project)
             connection.disconnect()
 
             // Stop all timers
-            idleTimer?.stop()
-            idleTimer = null
+            resetAnimationTimer?.stop()
+            resetAnimationTimer = null
+            idleCheckTimer?.stop()
+            idleCheckTimer = null
+            playlistTimer?.stop()
+            playlistTimer = null
             punchTimer?.stop()
             punchTimer = null
             autoPlayTimer?.stop()
@@ -511,46 +741,62 @@ class GifSpriteStickerService(private val project: Project)
 
 
     // ---------- Behavior ----------
-    private var idleTimer: Timer? = null
+    // ---------- Behavior ----------
+    private var resetAnimationTimer: Timer? = null // Resets frame to 0 after typing stops
 
     private fun setupIdleTimer() {
-        idleTimer?.stop()
-        idleTimer = Timer(2000) {
-            currentFrame = 0
-            val icon = idleIcon
-            if (label != null && icon != null) {
-                SwingUtilities.invokeLater {
-                    label?.icon = icon
+        // 1. Timer to reset animation to frame 0 (short delay)
+        resetAnimationTimer?.stop()
+        resetAnimationTimer = Timer(2000) {
+            if (!isIdle) { // Only reset if not already in idle mode
+                currentFrame = 0
+                val icon = idleIcon
+                if (label != null && icon != null) {
+                    SwingUtilities.invokeLater {
+                         label?.icon = icon
+                    }
                 }
             }
         }.apply { isRepeats = false }
+        
+        // 2. Timer to check for Idle Mode (long delay)
+        idleCheckTimer?.stop()
+        if (state.enableIdleMode) {
+            val timeoutMs = (state.idleTimeout * 1000).coerceAtLeast(1000)
+            idleCheckTimer = Timer(timeoutMs) {
+                enterIdleMode()
+            }.apply { isRepeats = false; start() }
+        }
     }
 
     private fun onTap() {
-        // Only respond to typing in TYPE_TRIGGERED mode
-        if (getAnimationMode() != AnimationMode.TYPE_TRIGGERED) return
-
         val p = panel ?: return
         val lbl = label ?: return
 
-        // Throttle animation to prevent performance issues
+        // Throttle to prevent performance issues
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastFrameTime < MIN_FRAME_INTERVAL) {
             return
         }
         lastFrameTime = currentTime
 
-        setupIdleTimer()
-        idleTimer?.restart()
+        // Always handle Idle mode wake-up on typing (regardless of animation mode)
+        if (state.enableIdleMode) {
+            wakeUp()
+            setupIdleTimer()
+            resetAnimationTimer?.restart()
+            idleCheckTimer?.restart()
+        }
 
-        // Advance to next frame in animation sequence (dynamic frame count)
-        // 使用本地快照避免並發問題
-        val icons = animationIcons
-        if (icons.isNotEmpty()) {
-            currentFrame = (currentFrame + 1) % icons.size
-            val nextIcon = icons[currentFrame]
-            SwingUtilities.invokeLater {
-                lbl.icon = nextIcon
+        // Only advance animation frames in TYPE_TRIGGERED mode
+        if (getAnimationMode() == AnimationMode.TYPE_TRIGGERED) {
+            val icons = animationIcons
+            if (icons.isNotEmpty()) {
+                currentFrame = (currentFrame + 1) % icons.size
+                val nextIcon = icons[currentFrame]
+                SwingUtilities.invokeLater {
+                    lbl.icon = nextIcon
+                }
             }
         }
     }
