@@ -253,25 +253,24 @@ class GifSpriteStickerService(private val project: Project)
     /**
      * 根據當前 state 初始化所有 timers。
      * 這會在 loadState() 恢復設定後被調用。
+     * 注意：Idle 和 Playlist 模式是互斥的，只會啟動其中一個。
      */
     private fun initializeTimersFromState() {
         // 停止現有的 timers
         idleCheckTimer?.stop()
         playlistTimer?.stop()
+        autoPlayTimer?.stop()
         
         // 根據動畫模式初始化
         if (getAnimationMode() == AnimationMode.AUTO_PLAY) {
             startAutoPlay()
         } else {
-            // 對於 TYPE_TRIGGERED 模式，根據 idle 設定初始化
-            if (state.enableIdleMode) {
-                setupIdleTimer()
+            // TYPE_TRIGGERED 模式：根據行為模式設定 Timer（Idle 和 Playlist 互斥）
+            when {
+                state.enablePlaylist -> setupPlaylistTimer()
+                state.enableIdleMode -> setupIdleTimer()
+                // Single 模式：不需要特殊 Timer
             }
-        }
-        
-        // 初始化 playlist timer
-        if (state.enablePlaylist) {
-            setupPlaylistTimer()
         }
     }
 

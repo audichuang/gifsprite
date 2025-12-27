@@ -31,13 +31,16 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private lateinit var enableCheck: JCheckBox
     private lateinit var sizeSlider: JSlider
     private lateinit var sizeLabel: JLabel
-    private lateinit var packComboBox: JComboBox<String>
     private lateinit var modeComboBox: JComboBox<String>
     private lateinit var speedSlider: JSlider
     private lateinit var speedLabel: JLabel
     private lateinit var opacitySlider: JSlider
     private lateinit var opacityLabel: JLabel
     private lateinit var previewLabel: JLabel
+    
+    // GIF 管理（使用列表視圖）
+    private var gifManageList: JBList<String>? = null
+    private var gifManageModel: DefaultListModel<String>? = null
     
     // Behavior Mode (nullable to avoid lateinit complexity)
     private var behaviorModeComboBox: JComboBox<String>? = null
@@ -180,26 +183,76 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     }
     
     private fun createGifManagementPanel(): JPanel {
+        // 初始化列表 Model
+        val model = DefaultListModel<String>().apply {
+            GifSpriteManager.getAvailablePacks().forEach { addElement(it) }
+        }
+        gifManageModel = model
+        
+        // 創建列表
+        val list = JBList(model).apply {
+            selectionMode = ListSelectionModel.SINGLE_SELECTION
+            visibleRowCount = 5
+            // 自定義渲染器：預設項目顯示特殊標記
+            cellRenderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean
+                ): java.awt.Component {
+                    val component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if (value == "default") {
+                        text = "🐶 default (預設)"
+                    } else {
+                        text = "🎬 $value"
+                    }
+                    border = JBUI.Borders.empty(4, 8)
+                    return component
+                }
+            }
+        }
+        gifManageList = list
+        
+        // 列表卷動區域
+        val scrollPane = JBScrollPane(list).apply {
+            preferredSize = Dimension(280, 120)
+            border = JBUI.Borders.customLine(java.awt.Color.GRAY, 1)
+        }
+        
+        // 按鈕區域
+        val buttonPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.emptyLeft(10)
+            
+            add(JButton("📥 從檔案匯入").apply {
+                addActionListener { importGif() }
+                alignmentX = java.awt.Component.LEFT_ALIGNMENT
+                maximumSize = Dimension(130, 30)
+            })
+            add(Box.createVerticalStrut(5))
+            add(JButton("🌐 從 URL 匯入").apply {
+                addActionListener { importGifFromUrl() }
+                alignmentX = java.awt.Component.LEFT_ALIGNMENT
+                maximumSize = Dimension(130, 30)
+            })
+            add(Box.createVerticalStrut(10))
+            add(JButton("🗑️ 刪除選取").apply {
+                addActionListener { deleteSelectedPack() }
+                alignmentX = java.awt.Component.LEFT_ALIGNMENT
+                maximumSize = Dimension(130, 30)
+            })
+        }
+        
         return panel {
             group("GIF 管理") {
                 row {
-                    button("匯入 GIF 檔案...") { importGif() }
-                    button("從 URL 匯入...") { importGifFromUrl() }
+                    cell(scrollPane)
+                    cell(buttonPanel)
                 }
                 row {
-                    label("已匯入的圖片:")
-                }
-                row {
-                    // 這個下拉選單只用於管理（配合刪除按鈕），不影響任何模式設定
-                    packComboBox = comboBox(GifSpriteManager.getAvailablePacks())
-                        .applyToComponent {
-                            // 不設定 selectedItem，因為這只是管理用途
-                            // 不添加 actionListener，避免影響預覽或設定
-                        }.component
-                    button("刪除選取") { deleteSelectedPack() }
-                }
-                row {
-                    comment("在下方選擇行為模式，再選擇要使用的 GIF")
+                    comment("👉 在下方「行為模式」選擇要使用的 GIF")
                 }
             }
         }
@@ -435,7 +488,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         if (frameCount > 0) {
                             Messages.showInfoMessage(project, "成功匯入 $frameCount 幀!", "Import Complete")
                             refreshPackList()
-                            packComboBox.selectedItem = sanitizedName
+                            // 選中新匯入的項目
+                            gifManageList?.setSelectedValue(sanitizedName, true)
                         } else {
                             Messages.showErrorDialog(project, "匯入失敗，請檢查 URL 是否正確", "Import Error")
                         }
@@ -468,7 +522,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                         if (frameCount > 0) {
                             Messages.showInfoMessage(project, "成功匯入 $frameCount 幀!", "Import Complete")
                             refreshPackList()
-                            packComboBox.selectedItem = sanitizedName
+                            // 選中新匯入的項目
+                            gifManageList?.setSelectedValue(sanitizedName, true)
                         } else {
                             Messages.showErrorDialog(project, "匯入失敗，請確認是有效的 GIF 動畫", "Import Error")
                         }
@@ -482,7 +537,10 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     }
 
     private fun deleteSelectedPack() {
-        val selectedPack = packComboBox.selectedItem as? String ?: return
+        val selectedPack = gifManageList?.selectedValue ?: run {
+            Messages.showWarningDialog(project, "請先選擇要刪除的 GIF", "Delete Pack")
+            return
+        }
         if (selectedPack == "default") {
             Messages.showWarningDialog(project, "無法刪除預設的 Sprite Pack", "Delete Pack")
             return
@@ -504,11 +562,16 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private fun refreshPackList() {
         val packs = GifSpriteManager.getAvailablePacks()
         
-        // GIF 管理區域的下拉選單（只用於管理，不影響設定）
-        val prevManageSelected = packComboBox.selectedItem
-        packComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
-        // 如果之前選擇的還在列表中，保持選擇；否則選第一個
-        packComboBox.selectedItem = if (packs.contains(prevManageSelected)) prevManageSelected else packs.firstOrNull()
+        // GIF 管理區域的列表
+        gifManageModel?.let { model ->
+            val prevSelected = gifManageList?.selectedValue
+            model.clear()
+            packs.forEach { model.addElement(it) }
+            // 維持選擇狀態
+            if (prevSelected != null && packs.contains(prevSelected)) {
+                gifManageList?.setSelectedValue(prevSelected, true)
+            }
+        }
         
         // Single 模式 GIF 選擇（獨立的選擇）
         singlePackComboBox?.let {
@@ -555,9 +618,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     // ========== Configurable Interface ==========
 
     override fun isModified(): Boolean {
-        // 優先使用 singlePackComboBox 的值
-        val selectedPack = singlePackComboBox?.selectedItem as? String 
-            ?: packComboBox.selectedItem as? String ?: "default"
+        // 使用 singlePackComboBox 的值
+        val selectedPack = singlePackComboBox?.selectedItem as? String ?: "default"
         val selectedModeIndex = modeComboBox.selectedIndex
         val selectedMode = if (selectedModeIndex >= 0 && selectedModeIndex < animModeValues.size) {
             animModeValues[selectedModeIndex]
@@ -685,9 +747,18 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private fun updatePreview() {
         if (!::previewLabel.isInitialized) return
         
-        // 優先使用 singlePackComboBox 的值，如果為 null 則使用 packComboBox
-        val packName = singlePackComboBox?.selectedItem as? String 
-            ?: packComboBox.selectedItem as? String ?: "default"
+        // 根據當前行為模式選擇正確的 GIF 進行預覽
+        val behaviorIndex = behaviorModeComboBox?.selectedIndex ?: 0
+        val packName = when (behaviorIndex) {
+            0 -> singlePackComboBox?.selectedItem as? String ?: "default"  // Single 模式
+            1 -> idleActivePackComboBox?.selectedItem as? String ?: "default"  // Idle 模式：顯示活動時的 GIF
+            2 -> {
+                // Playlist 模式：顯示清單中的第一個，或 singlePackComboBox 的值
+                val firstInPlaylist = playlistModel?.elements()?.toList()?.firstOrNull()
+                firstInPlaylist ?: singlePackComboBox?.selectedItem as? String ?: "default"
+            }
+            else -> "default"
+        }
         val size = sizeSlider.value
         val opacity = opacitySlider.value
         
@@ -699,9 +770,14 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
             if (previewTimer == null) {
                 previewTimer = Timer(speed) {
                     if (root == null) return@Timer
-                    // 優先使用 singlePackComboBox 的值
-                    val currentPack = singlePackComboBox?.selectedItem as? String 
-                        ?: packComboBox.selectedItem as? String ?: "default"
+                    // 根據當前行為模式選擇正確的 GIF
+                    val currentBehaviorIndex = behaviorModeComboBox?.selectedIndex ?: 0
+                    val currentPack = when (currentBehaviorIndex) {
+                        0 -> singlePackComboBox?.selectedItem as? String ?: "default"
+                        1 -> idleActivePackComboBox?.selectedItem as? String ?: "default"
+                        2 -> playlistModel?.elements()?.toList()?.firstOrNull() ?: "default"
+                        else -> "default"
+                    }
                     val currentSize = sizeSlider.value
                     val currentOpacity = opacitySlider.value
                     
