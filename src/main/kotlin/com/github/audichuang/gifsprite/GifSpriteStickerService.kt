@@ -55,7 +55,8 @@ class StickerState {
     
     // Idle Mode
     var enableIdleMode: Boolean = false
-    var idleSpritePack: String = "default"
+    var idleActiveSpritePack: String = "default"  // 活動時的 GIF（打字時）
+    var idleSpritePack: String = "default"        // 休息時的 GIF（閒置時）
     var idleTimeout: Int = 10 // seconds
 
     // Playlist Mode
@@ -277,6 +278,7 @@ class GifSpriteStickerService(private val project: Project)
     // ---------- Lifecycle ----------
     fun ensureAttached() {
         if (!state.visible || panel != null) return
+        if (project.isDisposed) return
 
         val app = ApplicationManager.getApplication()
         if (!app.isDispatchThread) {
@@ -610,9 +612,10 @@ class GifSpriteStickerService(private val project: Project)
     }
 
     // ---------- Idle Mode ----------
-    fun setIdleMode(enable: Boolean, idlePack: String, timeoutSec: Int) {
+    fun setIdleMode(enable: Boolean, activePack: String, idlePack: String, timeoutSec: Int) {
         state.enableIdleMode = enable
-        state.idleSpritePack = idlePack
+        state.idleActiveSpritePack = activePack  // 活動時的 GIF
+        state.idleSpritePack = idlePack          // 休息時的 GIF
         state.idleTimeout = timeoutSec
         
         if (enable) {
@@ -620,7 +623,10 @@ class GifSpriteStickerService(private val project: Project)
             playlistTimer?.stop()
             state.enablePlaylist = false
             
-            // 重新載入 idle icons（休息時的 GIF）
+            // Idle 模式下，主要顯示的是活動時的 GIF
+            state.selectedSpritePack = activePack
+            
+            // 重新載入 icons（活動時和休息時的 GIF）
             loadResourcesAsync()
             setupIdleTimer()
         } else {
@@ -628,6 +634,8 @@ class GifSpriteStickerService(private val project: Project)
             if (isIdle) wakeUp()
         }
     }
+    
+    fun getIdleActiveSpritePack(): String = state.idleActiveSpritePack
     
     private fun enterIdleMode() {
         if (isIdle || !state.enableIdleMode) return
@@ -692,6 +700,10 @@ class GifSpriteStickerService(private val project: Project)
             
             val intervalMs = (state.playlistInterval * 60 * 1000).coerceAtLeast(10000) // Min 10 sec
             playlistTimer = Timer(intervalMs) {
+                if (project.isDisposed) {
+                    playlistTimer?.stop()
+                    return@Timer
+                }
                 rotatePlaylist()
             }.apply { isRepeats = true; start() }
         }
@@ -738,13 +750,20 @@ class GifSpriteStickerService(private val project: Project)
         if (animationIcons.isEmpty()) return
 
         autoPlayTimer = Timer(state.animationSpeed) {
+            // 專案關閉時停止 Timer
+            if (project.isDisposed) {
+                autoPlayTimer?.stop()
+                return@Timer
+            }
             // 使用本地快照避免並發問題
             val icons = animationIcons
             if (icons.isNotEmpty()) {
                 val frame = currentFrame.updateAndGet { (it + 1) % icons.size }
                 val nextIcon = icons[frame]
                 SwingUtilities.invokeLater {
-                    label?.icon = nextIcon
+                    if (!project.isDisposed) {
+                        label?.icon = nextIcon
+                    }
                 }
             }
         }.apply {
@@ -806,12 +825,15 @@ class GifSpriteStickerService(private val project: Project)
         // 1. Timer to reset animation to frame 0 (short delay)
         resetAnimationTimer?.stop()
         resetAnimationTimer = Timer(2000) {
+            if (project.isDisposed) return@Timer
             if (!isIdle) { // Only reset if not already in idle mode
                 currentFrame.set(0)
                 val icon = idleIcon
                 if (label != null && icon != null) {
                     SwingUtilities.invokeLater {
-                         label?.icon = icon
+                        if (!project.isDisposed) {
+                            label?.icon = icon
+                        }
                     }
                 }
             }
@@ -822,6 +844,7 @@ class GifSpriteStickerService(private val project: Project)
         if (state.enableIdleMode) {
             val timeoutMs = (state.idleTimeout * 1000).coerceAtLeast(1000)
             idleCheckTimer = Timer(timeoutMs) {
+                if (project.isDisposed) return@Timer
                 enterIdleMode()
             }.apply { isRepeats = false; start() }
         }
@@ -853,7 +876,9 @@ class GifSpriteStickerService(private val project: Project)
                 val frame = currentFrame.updateAndGet { (it + 1) % icons.size }
                 val nextIcon = icons[frame]
                 SwingUtilities.invokeLater {
-                    lbl.icon = nextIcon
+                    if (!project.isDisposed) {
+                        lbl.icon = nextIcon
+                    }
                 }
             }
         }
@@ -894,13 +919,25 @@ class GifSpriteStickerService(private val project: Project)
         // Use cache to avoid reloading same icons
         val cacheKey = "$path:$dip:$opacity:$isCustomPack"
         return iconCache.getOrPut(cacheKey) {
+            val targetPx = JBUI.scale(dip)
+            
             val raw: Icon = if (isCustomPack) {
                 // Load from filesystem
                 try {
                     val file = File(path)
                     if (file.exists()) {
                         val image = ImageIO.read(file)
-                        ImageIcon(image)
+                        try {
+                            // 直接縮放並創建新的 ImageIcon，然後釋放原始 image
+                            val baseH = max(1, image.height)
+                            val scale = targetPx.toFloat() / baseH
+                            val scaledWidth = (image.width * scale).toInt().coerceAtLeast(1)
+                            val scaledHeight = (image.height * scale).toInt().coerceAtLeast(1)
+                            val scaledImage = image.getScaledInstance(scaledWidth, scaledHeight, java.awt.Image.SCALE_SMOOTH)
+                            ImageIcon(scaledImage)
+                        } finally {
+                            image.flush()  // 釋放原始 BufferedImage 的原生資源
+                        }
                     } else {
                         com.intellij.icons.AllIcons.General.Information
                     }
@@ -908,25 +945,22 @@ class GifSpriteStickerService(private val project: Project)
                     com.intellij.icons.AllIcons.General.Information
                 }
             } else {
-                // Load from bundled resources
+                // Load from bundled resources - 使用 IconLoader 並縮放
                 try {
-                    IconLoader.getIcon(path, javaClass)
+                    val bundled = IconLoader.getIcon(path, javaClass)
+                    val baseH = max(1, bundled.iconHeight)
+                    val scale = targetPx.toFloat() / baseH
+                    IconUtil.scale(bundled, null, scale)
                 } catch (_: Throwable) {
                     com.intellij.icons.AllIcons.General.Information
                 }
             }
             
-            // Apply size first
-            val targetPx = JBUI.scale(dip)
-            val baseH = max(1, raw.iconHeight)
-            val scale = targetPx.toFloat() / baseH
-            val scaledIcon = IconUtil.scale(raw, null, scale)
-            
-            // Then apply opacity if needed
+            // Apply opacity if needed
             if (opacity < 100) {
-                 TransparentIcon(scaledIcon, opacity / 100f)
+                 TransparentIcon(raw, opacity / 100f)
             } else {
-                scaledIcon
+                raw
             }
         }
     }

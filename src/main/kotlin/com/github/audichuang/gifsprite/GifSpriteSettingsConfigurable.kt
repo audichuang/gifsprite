@@ -190,11 +190,11 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     label("已匯入的圖片:")
                 }
                 row {
-                    // Show available packs as a list for reference
+                    // 這個下拉選單只用於管理（配合刪除按鈕），不影響任何模式設定
                     packComboBox = comboBox(GifSpriteManager.getAvailablePacks())
                         .applyToComponent {
-                            selectedItem = svc.getSelectedSpritePack()
-                            addActionListener { updatePreview() }
+                            // 不設定 selectedItem，因為這只是管理用途
+                            // 不添加 actionListener，避免影響預覽或設定
                         }.component
                     button("刪除選取") { deleteSelectedPack() }
                 }
@@ -310,12 +310,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                 row("活動時的 GIF:") {
                     idleActivePackComboBox = comboBox(GifSpriteManager.getAvailablePacks())
                         .applyToComponent {
-                            selectedItem = svc.getSelectedSpritePack()
-                            addActionListener { 
-                                // Sync with main packComboBox
-                                packComboBox.selectedItem = selectedItem
-                                updatePreview()
-                            }
+                            selectedItem = svc.getIdleActiveSpritePack()
+                            addActionListener { updatePreview() }
                         }.component
                 }
                 row("休息時的 GIF:") {
@@ -507,25 +503,35 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
 
     private fun refreshPackList() {
         val packs = GifSpriteManager.getAvailablePacks()
-        val prevSelected = packComboBox.selectedItem
+        
+        // GIF 管理區域的下拉選單（只用於管理，不影響設定）
+        val prevManageSelected = packComboBox.selectedItem
         packComboBox.model = DefaultComboBoxModel(packs.toTypedArray())
-        packComboBox.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
+        // 如果之前選擇的還在列表中，保持選擇；否則選第一個
+        packComboBox.selectedItem = if (packs.contains(prevManageSelected)) prevManageSelected else packs.firstOrNull()
         
-        // Single 模式 GIF 選擇
+        // Single 模式 GIF 選擇（獨立的選擇）
         singlePackComboBox?.let {
+            val prevSingle = it.selectedItem
             it.model = DefaultComboBoxModel(packs.toTypedArray())
-            it.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
+            it.selectedItem = if (packs.contains(prevSingle)) prevSingle else svc.getSelectedSpritePack()
         }
         
+        // Idle 模式：活動時的 GIF（獨立的選擇）
         idleActivePackComboBox?.let {
+            val prevActive = it.selectedItem
             it.model = DefaultComboBoxModel(packs.toTypedArray())
-            it.selectedItem = prevSelected ?: svc.getSelectedSpritePack()
+            it.selectedItem = if (packs.contains(prevActive)) prevActive else svc.getIdleActiveSpritePack()
         }
+        
+        // Idle 模式：休息時的 GIF（獨立的選擇）
         idlePackComboBox?.let {
             val prevIdle = it.selectedItem
             it.model = DefaultComboBoxModel(packs.toTypedArray())
-            it.selectedItem = prevIdle ?: svc.state.idleSpritePack
+            it.selectedItem = if (packs.contains(prevIdle)) prevIdle else svc.state.idleSpritePack
         }
+        
+        // Playlist 模式：添加用的下拉選單
         playlistAddComboBox?.let {
             it.model = DefaultComboBoxModel(packs.toTypedArray())
         }
@@ -560,8 +566,11 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         val (enableIdle, enablePlaylist) = getBehaviorModeSettings()
         val behaviorModified = enableIdle != svc.state.enableIdleMode || enablePlaylist != svc.state.enablePlaylist
         
+        // Idle 模式的修改檢查：活動時的 GIF + 休息時的 GIF + 等待時間
+        val idleActivePack = idleActivePackComboBox?.selectedItem as? String ?: "default"
         val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
-        val idleModified = idlePack != svc.state.idleSpritePack ||
+        val idleModified = idleActivePack != svc.getIdleActiveSpritePack() ||
+                           idlePack != svc.state.idleSpritePack ||
                            (idleTimeoutSlider?.value ?: svc.state.idleTimeout) != svc.state.idleTimeout
                            
         val currentPlaylist = svc.state.playlist
@@ -619,9 +628,10 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         svc.setAnimationSpeed(speedSlider.value)
         svc.applyOpacity(opacitySlider.value)
         
+        val idleActivePack = idleActivePackComboBox?.selectedItem as? String ?: "default"
         val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
         val idleTimeout = idleTimeoutSlider?.value ?: svc.state.idleTimeout
-        svc.setIdleMode(enableIdle, idlePack, idleTimeout)
+        svc.setIdleMode(enableIdle, idleActivePack, idlePack, idleTimeout)
         
         val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
         val playlistInterval = playlistIntervalSlider?.value ?: svc.state.playlistInterval
@@ -646,6 +656,10 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         // Single 模式 GIF 選擇器
         singlePackComboBox?.selectedItem = svc.getSelectedSpritePack()
         
+        // Idle 模式：活動時的 GIF（獨立儲存）
+        idleActivePackComboBox?.selectedItem = svc.getIdleActiveSpritePack()
+        
+        // Idle 模式：休息時的 GIF
         idlePackComboBox?.let {
             it.selectedItem = svc.state.idleSpritePack
             idleTimeoutSlider?.value = svc.state.idleTimeout
