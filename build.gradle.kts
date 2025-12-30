@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.github.audichuang"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -22,13 +22,30 @@ dependencies {
 }
 
 intellijPlatform {
+    buildSearchableOptions = false  // 加速開發編譯，避免不必要的警告
+    
     pluginConfiguration {
+        name = "GifSprite"
+        version = project.version.toString()
+        
+        vendor {
+            name = "AudiChuang"
+            email = "audiapplication880208@gmail.com"
+            url = "https://github.com/audichuang"
+        }
+        
         ideaVersion {
-            sinceBuild = "252"
+            sinceBuild = "241"
             untilBuild = provider { null }  // No upper limit for future compatibility
         }
 
         changeNotes = """
+            <h3>Version 1.0.1</h3>
+            <ul>
+                <li><b>Cross-Project Sync</b> - Settings now sync across all open project windows via MessageBus</li>
+                <li><b>Improved URL Import</b> - Progress bar shows download and frame processing progress</li>
+                <li><b>Global Settings</b> - Plugin settings persist globally instead of per-project</li>
+            </ul>
             <h3>Version 1.0.0</h3>
             <ul>
                 <li><b>Two Animation Modes</b> - Auto Play (always moving) or Type Triggered (moves when you type)</li>
@@ -45,6 +62,12 @@ intellijPlatform {
         ides {
             recommended()
         }
+    }
+    
+    // 從環境變數或 gradle.properties 讀取 token
+    publishing {
+        token = providers.environmentVariable("JETBRAINS_MARKETPLACE_TOKEN")
+            .orElse(providers.gradleProperty("intellijPlatform.publishing.token"))
     }
 }
 

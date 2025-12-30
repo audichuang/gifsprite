@@ -3,10 +3,7 @@ package com.github.audichuang.gifsprite
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
-import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.State
-import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.wm.WindowManager
@@ -34,43 +31,22 @@ private const val DEFAULT_MARGIN_DIP = 0
 private const val ICON_DIP = DEFAULT_SIZE_DIP
 
 /**
- * Animation mode for the sprite
+ * Animation mode for the sprite.
+ * 動畫模式：打字觸發或自動播放
  */
 enum class AnimationMode {
     TYPE_TRIGGERED,  // Animate when typing (current behavior)
     AUTO_PLAY        // Loop animation automatically
 }
 
-class StickerState {
-    var visible: Boolean = true
-    var xDip: Int = -1
-    var yDip: Int = -1
-    var sizeDip: Int = DEFAULT_SIZE_DIP
-    var animationSpeed: Int = 50 // ms between frames for auto-play (lower = faster)
-    var enableSmoothAnimation: Boolean = true
-    var selectedSpritePack: String = "default"  // "default" or custom pack name
-    var frameCount: Int = 24  // dynamic frame count
-    var animationMode: String = "TYPE_TRIGGERED"  // "TYPE_TRIGGERED" or "AUTO_PLAY"
-    var opacity: Int = 100 // 0-100 opacity percentage
-    
-    // Idle Mode
-    var enableIdleMode: Boolean = false
-    var idleActiveSpritePack: String = "default"  // 活動時的 GIF（打字時）
-    var idleSpritePack: String = "default"        // 休息時的 GIF（閒置時）
-    var idleTimeout: Int = 10 // seconds
+// Note: StickerState 類別已移到 GifSpriteSettings.kt
 
-    // Playlist Mode
-    var enablePlaylist: Boolean = false
-    var playlist: MutableList<String> = mutableListOf()
-    var playlistInterval: Int = 10 // minutes
-}
-
-@State(name = "GifSpriteStickerState", storages = [Storage("gifSpriteState.xml")])
 @Service(Service.Level.PROJECT)
-class GifSpriteStickerService(private val project: Project)
-    : PersistentStateComponent<StickerState>, Disposable {
+class GifSpriteStickerService(private val project: Project) : Disposable {
 
-    private var state = StickerState()
+    // 使用全域設定 Service，讓設定在所有專案中共用
+    private val state: StickerState
+        get() = GifSpriteSettings.getInstance().settings
     private var isIdle = false // Runtime state tracking
 
     private var layeredPane: JLayeredPane? = null
@@ -119,7 +95,18 @@ class GifSpriteStickerService(private val project: Project)
         connection.subscribe(GifSpriteTopic.TOPIC, object : GifSpriteTopic {
             override fun tapped() = onTap()
         })
-        // Note: loadResourcesAsync() is called in loadState() after settings are restored
+        
+        // 訂閱設定變更事件，實現跨專案同步
+        // 當任何一個專案視窗改了設定，所有專案的 Service 都會收到通知並重新載入資源
+        connection.subscribe(GIF_SPRITE_SETTINGS_TOPIC, object : GifSpriteSettingsListener {
+            override fun onSettingsChanged() {
+                // 重新載入資源與 Timer，同步更新 UI
+                initializeFromSettings()
+            }
+        })
+        
+        // 從全域設定初始化（資源載入 + UI 附加）
+        initializeFromSettings()
     }
 
     /**
@@ -236,13 +223,15 @@ class GifSpriteStickerService(private val project: Project)
         loadResourcesAsync()
     }
 
-    // ---------- PersistentStateComponent ----------
-    override fun getState(): StickerState = state
-    override fun loadState(s: StickerState) { 
-        state = s 
-        // Reload resources after state is loaded, initTimers=true 確保 timers 在資源載入後初始化
+    // ---------- 初始化（使用全域設定） ----------
+    /**
+     * 從全域設定初始化 Service。
+     * 這會在 Service 建立時自動呼叫。
+     */
+    fun initializeFromSettings() {
+        // Reload resources with current settings, initTimers=true 確保 timers 在資源載入後初始化
         loadResourcesAsync(initTimers = true)
-        // Re-attach if visible (state may have changed after initial startup)
+        // Re-attach if visible
         if (state.visible) {
             ApplicationManager.getApplication().invokeLater { 
                 ensureAttached()

@@ -72,6 +72,9 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     private var playlistIntervalLabel: JLabel? = null
     
     private val svc by lazy { project.service<GifSpriteStickerService>() }
+    // 直接使用全域設定，避免存取 svc 的 private state
+    private val settings: StickerState
+        get() = GifSpriteSettings.getInstance().settings
     
     private var previewTimer: Timer? = null
     private var currentPreviewFrame = 1
@@ -371,7 +374,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     idlePackComboBox = comboBox(GifSpriteManager.getAvailablePacks()).component
                 }
                 row {
-                    idleTimeoutLabel = label("等待時間: ${svc.state.idleTimeout} 秒").component
+                    idleTimeoutLabel = label("等待時間: ${settings.idleTimeout} 秒").component
                     idleTimeoutSlider = slider(5, 300, 0, 0).applyToComponent {
                         paintTicks = false
                         paintLabels = false
@@ -413,7 +416,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
                     }
                 }
                 row {
-                    playlistIntervalLabel = label("輪播間隔: ${svc.state.playlistInterval} 分鐘").component
+                    playlistIntervalLabel = label("輪播間隔: ${settings.playlistInterval} 分鐘").component
                     playlistIntervalSlider = slider(1, 60, 0, 0).applyToComponent {
                         paintTicks = false
                         paintLabels = false
@@ -432,8 +435,8 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
     // ========== Behavior Mode Logic ==========
     
     private fun getCurrentBehaviorModeIndex(): Int {
-        val enableIdle = svc.state.enableIdleMode
-        val enablePlaylist = svc.state.enablePlaylist
+        val enableIdle = settings.enableIdleMode
+        val enablePlaylist = settings.enablePlaylist
         return when {
             enablePlaylist -> 2  // Playlist
             enableIdle -> 1      // Idle
@@ -478,22 +481,98 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
             val packName = Messages.showInputDialog(project, "為這個 Sprite Pack 命名:", "Import GIF", null, defaultName, null)
             if (!packName.isNullOrBlank()) {
                 val sanitizedName = packName.replace(Regex("[/\\\\:*?\"<>|]"), "_").trim().take(50)
-                ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Importing GIF from URL...", false) {
+                
+                // 使用 Modal task 讓用戶更清楚看到進度（會顯示在對話框中央）
+                ProgressManager.getInstance().run(object : Task.Modal(project, "正在導入 GIF...", true) {
                     private var frameCount = -1
+                    private var errorMessage: String? = null
+                    
                     override fun run(indicator: ProgressIndicator) {
-                        indicator.isIndeterminate = true
-                        frameCount = GifSpriteManager.importGifFromUrl(url, packName)
+                        try {
+                            // 階段 1：下載 GIF
+                            indicator.isIndeterminate = false
+                            indicator.fraction = 0.0
+                            indicator.text = "正在下載 GIF..."
+                            indicator.text2 = url
+                            
+                            val tempFile = java.nio.file.Files.createTempFile("import_url", ".gif")
+                            val urlConnection = java.net.URI.create(url).toURL().openConnection()
+                            val contentLength = urlConnection.contentLengthLong
+                            
+                            urlConnection.getInputStream().use { input ->
+                                if (contentLength > 0) {
+                                    // 有內容長度：顯示實際下載進度
+                                    java.io.FileOutputStream(tempFile.toFile()).use { output ->
+                                        val buffer = ByteArray(8192)
+                                        var bytesRead: Int
+                                        var totalRead = 0L
+                                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                                            if (indicator.isCanceled) {
+                                                java.nio.file.Files.deleteIfExists(tempFile)
+                                                return
+                                            }
+                                            output.write(buffer, 0, bytesRead)
+                                            totalRead += bytesRead
+                                            indicator.fraction = (totalRead.toDouble() / contentLength) * 0.4  // 下載佔 40%
+                                            indicator.text2 = "已下載: ${totalRead / 1024} KB / ${contentLength / 1024} KB"
+                                        }
+                                    }
+                                } else {
+                                    // 無內容長度：使用 indeterminate
+                                    indicator.isIndeterminate = true
+                                    indicator.text2 = "正在接收數據..."
+                                    java.nio.file.Files.copy(input, tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                                    indicator.isIndeterminate = false
+                                }
+                            }
+                            
+                            if (indicator.isCanceled) {
+                                java.nio.file.Files.deleteIfExists(tempFile)
+                                return
+                            }
+                            
+                            // 階段 2：處理 GIF 幀
+                            indicator.fraction = 0.5
+                            indicator.text = "正在解析 GIF 幀..."
+                            indicator.text2 = "請稍候，這可能需要一些時間..."
+                            
+                            frameCount = GifSpriteManager.importGifWithProgress(tempFile.toFile(), packName) { progress, message ->
+                                if (!indicator.isCanceled) {
+                                    // 處理幀佔 50%~100%
+                                    indicator.fraction = 0.5 + (progress * 0.5)
+                                    indicator.text2 = message
+                                }
+                            }
+                            
+                            // 清理暫存檔
+                            java.nio.file.Files.deleteIfExists(tempFile)
+                            
+                            indicator.fraction = 1.0
+                            indicator.text = "導入完成！"
+                            indicator.text2 = "共 $frameCount 幀"
+                            
+                        } catch (e: Exception) {
+                            errorMessage = e.message ?: "Unknown error"
+                            frameCount = -1
+                        }
                     }
+                    
                     override fun onSuccess() {
                         if (frameCount > 0) {
                             Messages.showInfoMessage(project, "成功匯入 $frameCount 幀!", "Import Complete")
                             refreshPackList()
-                            // 選中新匯入的項目
                             gifManageList?.setSelectedValue(sanitizedName, true)
+                        } else if (errorMessage != null) {
+                            Messages.showErrorDialog(project, "匯入失敗: $errorMessage", "Import Error")
                         } else {
                             Messages.showErrorDialog(project, "匯入失敗，請檢查 URL 是否正確", "Import Error")
                         }
                     }
+                    
+                    override fun onCancel() {
+                        Messages.showInfoMessage(project, "導入已取消", "Cancelled")
+                    }
+                    
                     override fun onThrowable(error: Throwable) {
                         Messages.showErrorDialog(project, "錯誤: ${error.message}", "Import Error")
                     }
@@ -591,7 +670,7 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         idlePackComboBox?.let {
             val prevIdle = it.selectedItem
             it.model = DefaultComboBoxModel(packs.toTypedArray())
-            it.selectedItem = if (packs.contains(prevIdle)) prevIdle else svc.state.idleSpritePack
+            it.selectedItem = if (packs.contains(prevIdle)) prevIdle else settings.idleSpritePack
         }
         
         // Playlist 模式：添加用的下拉選單
@@ -626,18 +705,18 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         } else { "TYPE_TRIGGERED" }
         
         val (enableIdle, enablePlaylist) = getBehaviorModeSettings()
-        val behaviorModified = enableIdle != svc.state.enableIdleMode || enablePlaylist != svc.state.enablePlaylist
+        val behaviorModified = enableIdle != settings.enableIdleMode || enablePlaylist != settings.enablePlaylist
         
         // Idle 模式的修改檢查：活動時的 GIF + 休息時的 GIF + 等待時間
         val idleActivePack = idleActivePackComboBox?.selectedItem as? String ?: "default"
         val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
         val idleModified = idleActivePack != svc.getIdleActiveSpritePack() ||
-                           idlePack != svc.state.idleSpritePack ||
-                           (idleTimeoutSlider?.value ?: svc.state.idleTimeout) != svc.state.idleTimeout
+                           idlePack != settings.idleSpritePack ||
+                           (idleTimeoutSlider?.value ?: settings.idleTimeout) != settings.idleTimeout
                            
-        val currentPlaylist = svc.state.playlist
+        val currentPlaylist = settings.playlist
         val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
-        val playlistModified = (playlistIntervalSlider?.value ?: svc.state.playlistInterval) != svc.state.playlistInterval ||
+        val playlistModified = (playlistIntervalSlider?.value ?: settings.playlistInterval) != settings.playlistInterval ||
                                currentPlaylist != uiPlaylist
 
         return enableCheck.isSelected != svc.isVisible() ||
@@ -692,14 +771,17 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         
         val idleActivePack = idleActivePackComboBox?.selectedItem as? String ?: "default"
         val idlePack = idlePackComboBox?.selectedItem as? String ?: "default"
-        val idleTimeout = idleTimeoutSlider?.value ?: svc.state.idleTimeout
+        val idleTimeout = idleTimeoutSlider?.value ?: settings.idleTimeout
         svc.setIdleMode(enableIdle, idleActivePack, idlePack, idleTimeout)
         
         val uiPlaylist = playlistModel?.elements()?.toList() ?: emptyList()
-        val playlistInterval = playlistIntervalSlider?.value ?: svc.state.playlistInterval
+        val playlistInterval = playlistIntervalSlider?.value ?: settings.playlistInterval
         svc.setPlaylistMode(enablePlaylist, uiPlaylist, playlistInterval)
 
         if (svc.isVisible()) svc.ensureAttached()
+        
+        // 通知所有專案視窗設定已變更，觸發跨專案同步
+        GifSpriteSettings.getInstance().notifySettingsChanged()
     }
 
     override fun reset() {
@@ -723,16 +805,16 @@ class GifSpriteSettingsConfigurable(private val project: Project) : Configurable
         
         // Idle 模式：休息時的 GIF
         idlePackComboBox?.let {
-            it.selectedItem = svc.state.idleSpritePack
-            idleTimeoutSlider?.value = svc.state.idleTimeout
-            idleTimeoutLabel?.text = "等待時間: ${svc.state.idleTimeout} 秒"
+            it.selectedItem = settings.idleSpritePack
+            idleTimeoutSlider?.value = settings.idleTimeout
+            idleTimeoutLabel?.text = "等待時間: ${settings.idleTimeout} 秒"
         }
         
         playlistModel?.let { model ->
-            playlistIntervalSlider?.value = svc.state.playlistInterval
-            playlistIntervalLabel?.text = "輪播間隔: ${svc.state.playlistInterval} 分鐘"
+            playlistIntervalSlider?.value = settings.playlistInterval
+            playlistIntervalLabel?.text = "輪播間隔: ${settings.playlistInterval} 分鐘"
             model.clear()
-            svc.state.playlist.forEach { model.addElement(it) }
+            settings.playlist.forEach { model.addElement(it) }
         }
         
         behaviorModeComboBox?.let {

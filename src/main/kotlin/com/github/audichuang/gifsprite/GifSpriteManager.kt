@@ -125,10 +125,29 @@ object GifSpriteManager {
      * @return The number of frames extracted, or -1 on error
      */
     fun importGif(gifFile: File, packName: String): Int {
+        return importGifWithProgress(gifFile, packName, null)
+    }
+
+    /**
+     * Import a GIF file with progress callback.
+     * 帶進度回調的 GIF 導入方法，讓 UI 可以顯示處理進度。
+     *
+     * @param gifFile The GIF file to import
+     * @param packName The name for the new sprite pack
+     * @param onProgress Callback for progress updates: (progress: Double 0.0-1.0, message: String)
+     * @return The number of frames extracted, or -1 on error
+     */
+    fun importGifWithProgress(
+        gifFile: File, 
+        packName: String, 
+        onProgress: ((Double, String) -> Unit)?
+    ): Int {
         try {
             val packsDir = ensurePacksDirectoryExists()
             val packDir = packsDir.resolve(sanitizePackName(packName))
 
+            onProgress?.invoke(0.0, "準備目標資料夾...")
+            
             // Create pack directory
             if (Files.exists(packDir)) {
                 // Delete existing pack with same name
@@ -136,8 +155,10 @@ object GifSpriteManager {
             }
             Files.createDirectories(packDir)
 
-            // Extract GIF frames
-            return extractGifFrames(gifFile, packDir)
+            onProgress?.invoke(0.05, "開始解析 GIF 幀...")
+            
+            // Extract GIF frames with progress
+            return extractGifFramesWithProgress(gifFile, packDir, onProgress)
         } catch (e: Exception) {
             e.printStackTrace()
             return -1
@@ -192,6 +213,18 @@ object GifSpriteManager {
      * Properly handles GIF disposal methods, frame positioning, and memory management.
      */
     private fun extractGifFrames(gifFile: File, destDir: Path): Int {
+        return extractGifFramesWithProgress(gifFile, destDir, null)
+    }
+
+    /**
+     * Extract frames from a GIF file with progress callback.
+     * 帶進度回調的幀提取方法。
+     */
+    private fun extractGifFramesWithProgress(
+        gifFile: File, 
+        destDir: Path, 
+        onProgress: ((Double, String) -> Unit)?
+    ): Int {
         val readers = ImageIO.getImageReadersByFormatName("gif")
         if (!readers.hasNext()) {
             throw IllegalStateException("No GIF reader available")
@@ -202,10 +235,14 @@ object GifSpriteManager {
         ImageIO.createImageInputStream(gifFile).use { inputStream ->
             reader.input = inputStream
 
+            onProgress?.invoke(0.1, "正在讀取 GIF 資訊...")
+            
             val frameCount = reader.getNumImages(true)
             if (frameCount <= 0) {
                 throw IllegalStateException("No frames found in GIF")
             }
+
+            onProgress?.invoke(0.15, "發現 $frameCount 幀，開始處理...")
 
             // Get the logical screen size from the first frame
             val firstFrame = reader.read(0)
@@ -219,6 +256,10 @@ object GifSpriteManager {
 
             try {
                 for (i in 0 until frameCount) {
+                    // 計算並回報進度（幀處理佔 15%~100%）
+                    val frameProgress = 0.15 + (i.toDouble() / frameCount) * 0.85
+                    onProgress?.invoke(frameProgress, "處理第 ${i + 1} / $frameCount 幀...")
+                    
                     val frame = reader.read(i)
                     val metadata = getFrameMetadata(reader, i)
 
@@ -260,6 +301,9 @@ object GifSpriteManager {
                         frame.flush()  // 釋放每幀的原生記憶體
                     }
                 }
+                
+                onProgress?.invoke(1.0, "完成！共 $frameCount 幀")
+                
             } finally {
                 // 確保清理所有 BufferedImage 資源
                 canvas.flush()

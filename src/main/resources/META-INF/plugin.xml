@@ -1,6 +1,6 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 
     <id>com.github.audichuang.gifsprite</id>
     <depends>com.intellij.modules.platform</depends>
@@ -32,6 +32,12 @@
     </description>
 
     <change-notes><![CDATA[
+    <h2>Version 1.0.1</h2>
+    <ul>
+        <li><b>Cross-Project Sync</b> - Settings now sync across all open project windows</li>
+        <li><b>Improved URL Import</b> - Better progress feedback during GIF import</li>
+        <li><b>Global Settings</b> - Plugin settings persist globally</li>
+    </ul>
     <h2>Version 1.0.0</h2>
     <ul>
         <li><b>Two Animation Modes</b> - Auto Play or Type Triggered</li>

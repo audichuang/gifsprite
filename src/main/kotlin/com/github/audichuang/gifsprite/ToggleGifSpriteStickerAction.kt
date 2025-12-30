@@ -9,7 +9,7 @@ class ToggleGifSpriteStickerAction : AnAction("Toggle GifSprite"), DumbAware {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val svc = project.service<GifSpriteStickerService>()
-        svc.setVisible(!svc.state.visible)
-        if (svc.state.visible) svc.ensureAttached()
+        svc.setVisible(!svc.isVisible())
+        if (svc.isVisible()) svc.ensureAttached()
     }
 }
